@@ -37,7 +37,7 @@ class MicrosoftDefender:
         """
         url = f'https://login.microsoftonline.com/{get_env_variable('AzureTenantID')}/oauth2/token'
         body = {
-            'resource': self._config.DEFENDER_API_URL,
+            'resource': self._config.DEFENDER_OAUTH_RESOURCE,
             'client_id': get_env_variable('AzureClientID'),
             'client_secret': get_env_variable('AzureClientSecret'),
             'grant_type': 'client_credentials',
@@ -46,7 +46,8 @@ class MicrosoftDefender:
 
         if response.status_code > 300:
             self._throw_error(
-                f'Failed to authenticate at: {self._config.DEFENDER_API_URL}. Please, check your credentials.', response
+                f'Failed to authenticate at: {self._config.DEFENDER_OAUTH_RESOURCE}. Please, check your credentials.',
+                response
             )
 
         self._headers = {
@@ -85,7 +86,7 @@ class MicrosoftDefender:
         :param machine_os_platform: OS platform type
         :return: machine ID, evidences collection
         """
-        url = f'{self._config.DEFENDER_API_URL}/api/alerts/{alert_id}'
+        url = f'{self._config.DEFENDER_API_BASE_URL}/api/alerts/{alert_id}'
         evidences: dict = {'urls': [], 'filenames': [], 'filepaths': []}
 
         response = self._make_request(method='GET', url=url)
@@ -118,7 +119,7 @@ class MicrosoftDefender:
 
         :param machine_os_platform: OS platform type
         """
-        url = f'{self._config.DEFENDER_API_URL}/api/libraryfiles'
+        url = f'{self._config.DEFENDER_API_BASE_URL}/api/libraryfiles'
 
         if machine_os_platform == 'windows':
             script_name = self._config.PS_SCRIPT_NAME
@@ -210,15 +211,12 @@ class MicrosoftDefender:
         :param machine_id: Machine ID
         :return: Machine actions list
         """
-        url = f"{self._config.DEFENDER_API_URL}/api/machineactions?$filter=machineId+eq+'{machine_id}'"
+        url = f"{self._config.DEFENDER_API_BASE_URL}/api/machineactions?$filter=machineId+eq+'{machine_id}'"
 
         response = self._make_request(method='GET', url=url)
 
         if response.status_code >= 300:
-            self._throw_error(
-                f'Failed to get machine actions'
-                f'Status code: {response.status_code}. Reason: {response.text}'
-            )
+            self._throw_error('Failed to get machine actions.', response)
 
         return response.json().get('value')
 
@@ -355,7 +353,7 @@ class MicrosoftDefender:
         :param alert_id: Alert ID
         :param comment: Text comment
         """
-        url = f'{self._config.DEFENDER_API_URL}/api/alerts/{alert_id}'
+        url = f'{self._config.DEFENDER_API_BASE_URL}/api/alerts/{alert_id}'
         payload = {'comment': comment}
 
         response = self._make_request('PATCH', url=url, data=json.dumps(payload))
@@ -372,7 +370,7 @@ class MicrosoftDefender:
         :return: File download link
         """
         url = (
-            f'{self._config.DEFENDER_API_URL}/api/machineactions/{live_response_id}/'
+            f'{self._config.DEFENDER_API_BASE_URL}/api/machineactions/{live_response_id}/'
            f'GetLiveResponseResultDownloadLink(index={live_response_index})'
         )
 
@@ -407,7 +405,7 @@ class MicrosoftDefender:
 
         :param action_id: Live response job ID
         """
-        url = f'{self._config.DEFENDER_API_URL}/api/machineactions/{action_id}/cancel'
+        url = f'{self._config.DEFENDER_API_BASE_URL}/api/machineactions/{action_id}/cancel'
         payload = {'Comment': 'Live response action was cancelled by ANY.RUN Logic App request.'}
 
         response = self._make_request('POST', url=url, data=json.dumps(payload))
@@ -422,7 +420,7 @@ class MicrosoftDefender:
         :param live_response_id: Live response job ID
         :return: Live response job info
         """
-        url = f'{self._config.DEFENDER_API_URL}/api/machineactions/{live_response_id}'
+        url = f'{self._config.DEFENDER_API_BASE_URL}/api/machineactions/{live_response_id}'
 
         response = self._make_request(method='GET', url=url)
 
@@ -441,7 +439,7 @@ class MicrosoftDefender:
         """
         self._wait_run_other_machine_actions(machine_id)
 
-        url = f'{self._config.DEFENDER_API_URL}/api/machines/{machine_id}/runliveresponse'
+        url = f'{self._config.DEFENDER_API_BASE_URL}/api/machines/{machine_id}/runliveresponse'
 
         self._log.info(f'Run live response job on machine: {machine_id}.')
         response = self._make_request(
@@ -450,7 +448,7 @@ class MicrosoftDefender:
             data=json.dumps(live_response_command),
         )
 
-        if 'error' in response.json():
+        if response.status_code >= 300:
             self._throw_error('Failed to execute live response job.', response)
 
         time.sleep(self._config.ACTION_TIMEOUT)
@@ -531,7 +529,7 @@ class MicrosoftDefender:
         :param indicators: List of indicators
         :param task_uuid: Analysis uuid
         """
-        url = f'{self._config.DEFENDER_API_URL}/api/indicators/import'
+        url = f'{self._config.DEFENDER_API_BASE_URL}/api/indicators/import'
 
         payload = {
             'Indicators': [
@@ -612,6 +610,9 @@ class MicrosoftDefender:
         """
         self._log.error(error_message)
 
-        if response:
-            raise RunTimeException(error_message + response.text, response.status_code)
+        if response is not None:
+            raise RunTimeException(
+                f'{error_message} Response: {response.text}',
+                response.status_code
+            )
         raise RunTimeException(error_message)
