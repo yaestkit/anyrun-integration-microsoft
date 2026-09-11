@@ -223,53 +223,13 @@
       ]
     },
     {
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2022-09-01",
-      "name": "AssignFunctionStorageRole",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-04-01-preview",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName')), variables('storageRoleDefinitionId'))]",
+      "scope": "[concat('Microsoft.Storage/storageAccounts', '/', parameters('AzureStorageAccountName'))]",
       "properties": {
-        "mode": "Incremental",
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "parameters": {
-          "storageAccountName": {
-            "value": "[parameters('AzureStorageAccountName')]"
-          },
-          "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2024-11-01', 'Full').identity.principalId]"
-          },
-          "storageRoleDefinitionId": {
-            "value": "[variables('storageRoleDefinitionId')]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "parameters": {
-            "storageAccountName": {
-              "type": "string"
-            },
-            "principalId": {
-              "type": "string"
-            },
-            "storageRoleDefinitionId": {
-              "type": "string"
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Authorization/roleAssignments",
-              "apiVersion": "2022-04-01",
-              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('principalId'), parameters('storageRoleDefinitionId'))]",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
-              "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('storageRoleDefinitionId'))]",
-                "principalId": "[parameters('principalId')]",
-                "principalType": "ServicePrincipal"
-              }
-            }
-          ]
-        }
+        "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('storageRoleDefinitionId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2023-12-01', 'Full').identity.principalId]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName'))]",
