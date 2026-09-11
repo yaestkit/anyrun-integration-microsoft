@@ -1,10 +1,10 @@
+import base64
 import os
 import json
 import time
 import traceback
 from datetime import datetime, timedelta, UTC
 from itertools import batched
-from string import Template
 
 import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder
@@ -20,6 +20,24 @@ from .utils import (
     generate_task_uuid_comment,
     generate_analysis_summary_comment
 )
+
+
+LIVE_RESPONSE_PAYLOAD_VERSION = 'v1'
+
+
+def encode_live_response_payload(
+    filepaths: list[str],
+    sas_token: str,
+    storage_account_name: str,
+    container_name: str,
+) -> str:
+    """Encode Live Response parameters using a shell-safe, versioned envelope."""
+    values = [sas_token, storage_account_name, container_name, *filepaths]
+    encoded_values = [
+        base64.urlsafe_b64encode(value.encode('utf-8')).decode('ascii').rstrip('=')
+        for value in values
+    ]
+    return '.'.join([LIVE_RESPONSE_PAYLOAD_VERSION, *encoded_values])
 
 
 class MicrosoftDefender:
@@ -131,9 +149,6 @@ class MicrosoftDefender:
         with open(script_path) as script_file:
             script_content = script_file.read()
 
-        script_content_temp = Template(script_content)
-        updated_sas_token = script_content_temp.safe_substitute(SAS_TOKEN=f'?{self._generate_sas_token()}')
-
         response = self._make_request(
             method='POST',
             url=url,
@@ -142,7 +157,7 @@ class MicrosoftDefender:
                     'HasParameters': 'true',
                     'OverrideIfExists': 'true',
                     'Description': 'description',
-                    'file': (script_name, updated_sas_token, 'text/plain'),
+                    'file': (script_name, script_content, 'text/plain'),
                 }
             )
         )
@@ -164,24 +179,17 @@ class MicrosoftDefender:
         :param filepaths: Quarantine file paths
         """
         if machine_os_platform == 'windows':
-            values = (
-                f"-filePath '{','.join(filepaths)}' "
-                f"-SAStoken '{self._generate_sas_token()}' "
-                f"-storageAccountName {get_env_variable('AzureStorageAccountName')} "
-                f"-containerName {get_env_variable('AzureBlobContainerName')}"
-            )
-        elif machine_os_platform == 'linux':
-            values = (
-                f"{self._generate_sas_token()} "
-                f"{get_env_variable('AzureStorageAccountName')} "
-                f"{get_env_variable('AzureBlobContainerName')} "
-                f"{' '.join(filepaths)}"
-            )
-
-        if machine_os_platform == 'windows':
             script_name = self._config.PS_SCRIPT_NAME
         elif machine_os_platform == 'linux':
             script_name = self._config.BASH_SCRIPT_NAME
+
+        payload = encode_live_response_payload(
+            filepaths=filepaths,
+            sas_token=self._generate_sas_token(),
+            storage_account_name=get_env_variable('AzureStorageAccountName'),
+            container_name=get_env_variable('AzureBlobContainerName'),
+        )
+        values = f'-payload {payload}'
 
         live_response_command = {
             'Commands': [
@@ -578,7 +586,7 @@ class MicrosoftDefender:
         try:
             response = requests.request(method, url, headers=self._setup_headers(data, stream), data=data, stream=stream)
         except (requests.RequestException, OSError) as error:
-            self._throw_error(f'Unspecified Network exception: {traceback.format_exc(error)}. Status code {response.status_code}')
+            self._throw_error(f'Network request failed: {error}.')
         return response
 
     def _setup_headers(

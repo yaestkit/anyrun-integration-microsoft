@@ -1,11 +1,51 @@
 #!/bin/bash
 
-# Parameters: SAStoken storageAccountName containerName filePath1 [filePath2 ...]
-SAStoken="$1"
-storageAccountName="$2"
-containerName="$3"
-shift 3
-filePaths=("$@")
+# Parameters: -payload <versioned Base64URL envelope>
+if [[ "${1:-}" != "-payload" || -z "${2:-}" ]]; then
+    echo "Invalid Live Response payload."
+    exit 1
+fi
+
+payload="$2"
+IFS='.' read -r -a payloadParts <<< "$payload"
+
+if [[ "${#payloadParts[@]}" -lt 5 || "${payloadParts[0]}" != "v1" ]]; then
+    echo "Invalid or unsupported Live Response payload."
+    exit 1
+fi
+
+decode_base64url() {
+    local value="$1"
+    local remainder=$(( ${#value} % 4 ))
+
+    value="${value//-/+}"
+    value="${value//_/\/}"
+
+    case "$remainder" in
+        0) ;;
+        2) value="${value}==" ;;
+        3) value="${value}=" ;;
+        *) return 1 ;;
+    esac
+
+    printf '%s' "$value" | base64 --decode
+}
+
+if ! SAStoken="$(decode_base64url "${payloadParts[1]}")" ||
+   ! storageAccountName="$(decode_base64url "${payloadParts[2]}")" ||
+   ! containerName="$(decode_base64url "${payloadParts[3]}")"; then
+    echo "Failed to decode Live Response payload."
+    exit 1
+fi
+
+filePaths=()
+for ((index = 4; index < ${#payloadParts[@]}; index++)); do
+    if ! decodedPath="$(decode_base64url "${payloadParts[$index]}")"; then
+        echo "Failed to decode Live Response payload."
+        exit 1
+    fi
+    filePaths+=("$decodedPath")
+done
 
 # Get current date for logging
 date=$(date +"%Y-%m-%d %H:%M:%S")
@@ -40,8 +80,8 @@ upload_to_blob() {
         sas="?$sas"
     fi
     blobUrl="https://$storageAccountName.blob.core.windows.net/$containerName/$blobName$sas"
-    echo "Uploading to URL: $blobUrl"  # Debug: Print URL
-    curl -X PUT -T "$file" -H "x-ms-blob-type: BlockBlob" -H "x-ms-version: 2021-04-10" -H "Content-Type: application/octet-stream" "$blobUrl" -v
+    echo "Uploading file to Blob Storage: $blobName"
+    curl --fail --silent --show-error -X PUT -T "$file" -H "x-ms-blob-type: BlockBlob" -H "x-ms-version: 2021-04-10" -H "Content-Type: application/octet-stream" "$blobUrl"
     if [ $? -eq 0 ]; then
         echo "File uploaded to Blob Storage successfully: $blobName"
         return 0

@@ -1,9 +1,38 @@
 param (
-    [string[]]$filePath = @(),
-    [string]$SAStoken = "",
-    [string]$storageAccountName = "",
-    [string]$containerName = ""
+    [Parameter(Mandatory = $true)]
+    [string]$payload
 )
+
+function ConvertFrom-Base64Url {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$value
+    )
+
+    $base64 = $value.Replace('-', '+').Replace('_', '/')
+    switch ($base64.Length % 4) {
+        0 { }
+        2 { $base64 += '==' }
+        3 { $base64 += '=' }
+        default { throw "Invalid Base64URL value." }
+    }
+
+    $bytes = [Convert]::FromBase64String($base64)
+    return [Text.Encoding]::UTF8.GetString($bytes)
+}
+
+$payloadParts = $payload.Split('.')
+if ($payloadParts.Count -lt 5 -or $payloadParts[0] -ne 'v1') {
+    throw "Invalid or unsupported Live Response payload."
+}
+
+$SAStoken = ConvertFrom-Base64Url -value $payloadParts[1]
+$storageAccountName = ConvertFrom-Base64Url -value $payloadParts[2]
+$containerName = ConvertFrom-Base64Url -value $payloadParts[3]
+$filePath = @()
+for ($index = 4; $index -lt $payloadParts.Count; $index++) {
+    $filePath += ConvertFrom-Base64Url -value $payloadParts[$index]
+}
 
 # Get current date for logging
 $date = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -18,8 +47,7 @@ function Restore-FromQuarantine {
         [string]$restorePath
     )
     Write-Host "Checking quarantine for file: $file"
-    $quarantineCmd = "& 'C:\Program Files\Windows Defender\MpCmdRun.exe' -Restore -FilePath '$file' -Path '$restorePath'"
-    Invoke-Expression $quarantineCmd
+    & 'C:\Program Files\Windows Defender\MpCmdRun.exe' -Restore -FilePath $file -Path $restorePath
     Start-Sleep -Seconds 5
     $restoredFilePath = Join-Path -Path $restorePath -ChildPath (Split-Path $file -Leaf)
     if (Test-Path $restoredFilePath) {
@@ -43,7 +71,7 @@ function Upload-ToBlob {
         $sas = "?" + $sas
     }
     $blobUrl = "https://$storageAccountName.blob.core.windows.net/$containerName/$blobName$sas"
-    Write-Host "Uploading to URL: $blobUrl"  # Debug: Print URL
+    Write-Host "Uploading file to Blob Storage: $blobName"
     $headers = @{
         "x-ms-blob-type" = "BlockBlob"
         "x-ms-version" = "2021-04-10"
@@ -53,12 +81,16 @@ function Upload-ToBlob {
     $headers["Content-Length"] = $fileSize
     $fileContent = [System.IO.File]::ReadAllBytes($file)
     try {
-        Invoke-RestMethod -Uri $blobUrl -Method Put -Headers $headers -Body $fileContent -Verbose
+        Invoke-RestMethod -Uri $blobUrl -Method Put -Headers $headers -Body $fileContent
         Write-Host "File uploaded to Blob Storage successfully: $blobName"
         return $true
     } catch {
-        Write-Host "Error uploading file: $_"
-        Write-Host "Response: $($_.Exception.Response)"
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        if ($statusCode) {
+            Write-Host "Error uploading file to Blob Storage. HTTP status: $statusCode"
+        } else {
+            Write-Host "Error uploading file to Blob Storage."
+        }
         return $false
     }
 }
