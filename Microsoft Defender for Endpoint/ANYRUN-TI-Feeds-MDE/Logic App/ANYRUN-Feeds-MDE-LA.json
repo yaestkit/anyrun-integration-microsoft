@@ -56,6 +56,13 @@
                             "defaultValue": "[parameters('feedFetchDepth')]",
                             "type": "int"
                         },
+                        "Minimum Confidence": {
+                            "defaultValue": 100,
+                            "type": "int",
+                            "metadata": {
+                                "description": "Minimum STIX confidence required to import an indicator (inclusive, 1-100)"
+                            }
+                        },
                         "$connections": {
                             "defaultValue": {},
                             "type": "Object"
@@ -88,6 +95,11 @@
                                         "name": "feed_fetch_depth",
                                         "type": "integer",
                                         "value": "[parameters('feedFetchDepth')]"
+                                    },
+                                    {
+                                        "name": "minimum_confidence",
+                                        "type": "integer",
+                                        "value": "@parameters('Minimum Confidence')"
                                     }
                                 ]
                             }
@@ -101,7 +113,8 @@
                             "type": "Function",
                             "inputs": {
                                 "body": {
-                                    "feed_fetch_depth": "@variables('feed_fetch_depth')"
+                                    "feed_fetch_depth": "@variables('feed_fetch_depth')",
+                                    "minimum_confidence": "@variables('minimum_confidence')"
                                 },
                                 "function": {
                                     "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Feeds-MDE-FA')]"
@@ -112,6 +125,9 @@
                     "outputs": {}
                 },
                 "parameters": {
+                    "Minimum Confidence": {
+                        "value": 100
+                    },
                     "$connections": {
                         "value": {}
                     }
