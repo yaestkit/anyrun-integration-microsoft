@@ -12,14 +12,23 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     log.info('AnyRunFeeds started. Checking TI Feeds credentials...')
 
     try:
-        feed_fetch_depth: int = req.params.get('feed_fetch_depth') or req.get_json().get('feed_fetch_depth')
+        try:
+            request_body = req.get_json()
+        except ValueError:
+            request_body = {}
+
+        feed_fetch_depth = req.params.get('feed_fetch_depth') or request_body.get('feed_fetch_depth')
+        minimum_confidence = req.params.get('minimum_confidence')
+
+        if minimum_confidence is None:
+            minimum_confidence = request_body.get('minimum_confidence', 100)
 
         if not feed_fetch_depth:
             raise ValueError(
                 f'The following parameters: feed_fetch_depth are required.'
             )
 
-        feed_connector = AnyRunFeeds(log, feed_fetch_depth)
+        feed_connector = AnyRunFeeds(log, feed_fetch_depth, minimum_confidence)
         feed_connector.process_enrichment()
 
         return func.HttpResponse(

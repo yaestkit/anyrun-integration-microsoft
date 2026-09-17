@@ -1,6 +1,10 @@
 import os
 
 
+MIN_CONFIDENCE = 1
+MAX_CONFIDENCE = 100
+
+
 def get_env_variable(name: str, default: str | None = None) -> str:
     """
     Retrieves environment variable value
@@ -18,6 +22,58 @@ def get_env_variable(name: str, default: str | None = None) -> str:
         raise ValueError(f'Environment variable {name} is not set.')
         
     return variable
+
+
+def validate_minimum_confidence(value: int | str) -> int:
+    """Validate and normalize the inclusive confidence threshold."""
+    if isinstance(value, bool):
+        raise ValueError('minimum_confidence must be an integer from 1 to 100.')
+
+    try:
+        minimum_confidence = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError('minimum_confidence must be an integer from 1 to 100.') from error
+
+    if not MIN_CONFIDENCE <= minimum_confidence <= MAX_CONFIDENCE:
+        raise ValueError('minimum_confidence must be an integer from 1 to 100.')
+
+    return minimum_confidence
+
+
+def filter_indicators_by_confidence(
+    indicators: list[dict],
+    minimum_confidence: int,
+) -> tuple[list[dict], int, int]:
+    """
+    Select indicators whose STIX confidence meets the inclusive threshold.
+
+    Indicators with missing, boolean, non-numeric, or out-of-range confidence
+    values are excluded. Returns selected indicators and counts of indicators
+    excluded for low and invalid confidence respectively.
+    """
+    minimum_confidence = validate_minimum_confidence(minimum_confidence)
+    selected = []
+    below_threshold = 0
+    invalid_confidence = 0
+
+    for indicator in indicators:
+        confidence = indicator.get('confidence')
+
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not 0 <= confidence <= MAX_CONFIDENCE
+        ):
+            invalid_confidence += 1
+            continue
+
+        if confidence < minimum_confidence:
+            below_threshold += 1
+            continue
+
+        selected.append(indicator)
+
+    return selected, below_threshold, invalid_confidence
 
 
 def extract_indicator_data(pattern: str) -> tuple[str, str]:

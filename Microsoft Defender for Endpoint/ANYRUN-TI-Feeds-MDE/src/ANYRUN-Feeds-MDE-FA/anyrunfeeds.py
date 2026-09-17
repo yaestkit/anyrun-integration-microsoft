@@ -11,9 +11,11 @@ from anyrun.connectors import FeedsConnector
 from .config import Config
 from .utils import (
     extract_indicator_data,
+    filter_indicators_by_confidence,
     get_description,
     get_env_variable,
     get_severity,
+    validate_minimum_confidence,
 )
 
 DATE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -21,12 +23,13 @@ DATE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 class AnyRunFeeds:
     """ Class - wrapper to interact with MS Defender and ANY.RUN REST API """
-    def __init__(self, log, feed_fetch_depth: int) -> None:
+    def __init__(self, log, feed_fetch_depth: int, minimum_confidence: int = 100) -> None:
         self._headers = None
         self._config = Config
         self._log = log
 
-        self._feed_fetch_depth = feed_fetch_depth
+        self._feed_fetch_depth = int(feed_fetch_depth)
+        self._minimum_confidence = validate_minimum_confidence(minimum_confidence)
 
         self._authenticate()
 
@@ -125,12 +128,38 @@ class AnyRunFeeds:
             modified_after=(datetime.now(UTC) - timedelta(days=self._feed_fetch_depth)).strftime(DATE_TIME_FORMAT)
         )
 
-        indicators = [feed for feed in feeds.get('objects')]
+        downloaded_indicators = feeds.get('objects') or []
+        indicators, below_threshold, invalid_confidence = filter_indicators_by_confidence(
+            downloaded_indicators,
+            self._minimum_confidence,
+        )
+
+        self._log.info(
+            'Downloaded %s indicators; selected %s with confidence >= %s.',
+            len(downloaded_indicators),
+            len(indicators),
+            self._minimum_confidence,
+        )
+
+        if below_threshold:
+            self._log.info(
+                'Skipped %s indicators below the minimum confidence threshold.',
+                below_threshold,
+            )
+
+        if invalid_confidence:
+            self._log.warning(
+                'Skipped %s indicators with missing or invalid confidence.',
+                invalid_confidence,
+            )
 
         if indicators:
-            self._log.info(f'Found {len(indicators)} indicators.')
+            self._log.info(f'Found {len(indicators)} indicators after confidence filtering.')
         else:
-            self._log.warning('No indicators found in ANY.RUN TI.')
+            self._log.warning(
+                'No ANY.RUN TI indicators met the minimum confidence threshold of %s.',
+                self._minimum_confidence,
+            )
 
         return indicators
 

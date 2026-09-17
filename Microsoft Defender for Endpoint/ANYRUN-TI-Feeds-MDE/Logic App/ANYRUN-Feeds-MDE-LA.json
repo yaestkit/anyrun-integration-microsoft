@@ -20,6 +20,15 @@
                 "description": "Depth of the feed to fetch (in days)"
             }
         },
+        "minimumConfidence": {
+            "defaultValue": 100,
+            "type": "int",
+            "minValue": 1,
+            "maxValue": 100,
+            "metadata": {
+                "description": "Minimum STIX confidence required to import an indicator (inclusive, 1-100)"
+            }
+        },
         "functionAppName": {
             "defaultValue": "ANYRUN-Feeds-MDE-FA",
             "type": "String",
@@ -56,6 +65,10 @@
                             "defaultValue": "[parameters('feedFetchDepth')]",
                             "type": "int"
                         },
+                        "Minimum Confidence": {
+                            "defaultValue": "[parameters('minimumConfidence')]",
+                            "type": "int"
+                        },
                         "$connections": {
                             "defaultValue": {},
                             "type": "Object"
@@ -88,6 +101,11 @@
                                         "name": "feed_fetch_depth",
                                         "type": "integer",
                                         "value": "[parameters('feedFetchDepth')]"
+                                    },
+                                    {
+                                        "name": "minimum_confidence",
+                                        "type": "integer",
+                                        "value": "[parameters('minimumConfidence')]"
                                     }
                                 ]
                             }
@@ -101,7 +119,8 @@
                             "type": "Function",
                             "inputs": {
                                 "body": {
-                                    "feed_fetch_depth": "@variables('feed_fetch_depth')"
+                                    "feed_fetch_depth": "@variables('feed_fetch_depth')",
+                                    "minimum_confidence": "@variables('minimum_confidence')"
                                 },
                                 "function": {
                                     "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Feeds-MDE-FA')]"
