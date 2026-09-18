@@ -20,6 +20,15 @@
                 "description": "Depth of the feed to fetch (in days)"
             }
         },
+        "minimumConfidence": {
+            "defaultValue": 50,
+            "type": "int",
+            "minValue": 1,
+            "maxValue": 100,
+            "metadata": {
+                "description": "Import indicators with confidence greater than or equal to this value (inclusive, 1-100)."
+            }
+        },
         "functionAppName": {
             "defaultValue": "ANYRUN-Feeds-MDE-FA",
             "type": "String",
@@ -55,13 +64,6 @@
                         "Feed Fetch Depth": {
                             "defaultValue": "[parameters('feedFetchDepth')]",
                             "type": "int"
-                        },
-                        "Minimum Confidence": {
-                            "defaultValue": 100,
-                            "type": "int",
-                            "metadata": {
-                                "description": "Minimum STIX confidence required to import an indicator (inclusive, 1-100)"
-                            }
                         },
                         "$connections": {
                             "defaultValue": {},
@@ -99,7 +101,7 @@
                                     {
                                         "name": "minimum_confidence",
                                         "type": "integer",
-                                        "value": "@parameters('Minimum Confidence')"
+                                        "value": "[parameters('minimumConfidence')]"
                                     }
                                 ]
                             }
@@ -125,9 +127,6 @@
                     "outputs": {}
                 },
                 "parameters": {
-                    "Minimum Confidence": {
-                        "value": 100
-                    },
                     "$connections": {
                         "value": {}
                     }
