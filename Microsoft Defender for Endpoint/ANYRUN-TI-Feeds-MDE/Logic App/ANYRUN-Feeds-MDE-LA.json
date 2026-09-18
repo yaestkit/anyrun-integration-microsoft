@@ -21,6 +21,7 @@
             }
         },
         "minimumConfidence": {
+        "minimumConfidenceThreshold": {
             "defaultValue": 50,
             "type": "int",
             "minValue": 1,
@@ -100,8 +101,10 @@
                                     },
                                     {
                                         "name": "minimum_confidence",
+                                        "name": "minimum_confidence_threshold",
                                         "type": "integer",
                                         "value": "[parameters('minimumConfidence')]"
+                                        "value": "[parameters('minimumConfidenceThreshold')]"
                                     }
                                 ]
                             }
@@ -117,6 +120,7 @@
                                 "body": {
                                     "feed_fetch_depth": "@variables('feed_fetch_depth')",
                                     "minimum_confidence": "@variables('minimum_confidence')"
+                                    "minimum_confidence": "@variables('minimum_confidence_threshold')"
                                 },
                                 "function": {
                                     "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Feeds-MDE-FA')]"
