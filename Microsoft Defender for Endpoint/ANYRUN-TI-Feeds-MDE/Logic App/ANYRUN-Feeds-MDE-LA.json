@@ -20,7 +20,6 @@
                 "description": "Depth of the feed to fetch (in days)"
             }
         },
-        "minimumConfidence": {
         "minimumConfidenceThreshold": {
             "defaultValue": 50,
             "type": "int",
@@ -100,10 +99,8 @@
                                         "value": "[parameters('feedFetchDepth')]"
                                     },
                                     {
-                                        "name": "minimum_confidence",
                                         "name": "minimum_confidence_threshold",
                                         "type": "integer",
-                                        "value": "[parameters('minimumConfidence')]"
                                         "value": "[parameters('minimumConfidenceThreshold')]"
                                     }
                                 ]
@@ -119,7 +116,6 @@
                             "inputs": {
                                 "body": {
                                     "feed_fetch_depth": "@variables('feed_fetch_depth')",
-                                    "minimum_confidence": "@variables('minimum_confidence')"
                                     "minimum_confidence": "@variables('minimum_confidence_threshold')"
                                 },
                                 "function": {
