@@ -1,8 +1,9 @@
 import os
 
 
-MIN_CONFIDENCE = 1
-MAX_CONFIDENCE = 100
+DEFAULT_MINIMUM_CONFIDENCE_THRESHOLD = 50
+MINIMUM_CONFIDENCE_THRESHOLD_MIN = 1
+MINIMUM_CONFIDENCE_THRESHOLD_MAX = 100
 
 
 def get_env_variable(name: str, default: str | None = None) -> str:
@@ -24,25 +25,31 @@ def get_env_variable(name: str, default: str | None = None) -> str:
     return variable
 
 
-def validate_minimum_confidence(value: int | str) -> int:
+def validate_minimum_confidence_threshold(value: int | str) -> int:
     """Validate and normalize the inclusive confidence threshold."""
-    if isinstance(value, bool):
-        raise ValueError('minimum_confidence must be an integer from 1 to 100.')
+    error_message = 'minimum_confidence_threshold must be an integer from 1 to 100.'
+
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(error_message)
 
     try:
-        minimum_confidence = int(value)
+        minimum_confidence_threshold = int(value)
     except (TypeError, ValueError) as error:
-        raise ValueError('minimum_confidence must be an integer from 1 to 100.') from error
+        raise ValueError(error_message) from error
 
-    if not MIN_CONFIDENCE <= minimum_confidence <= MAX_CONFIDENCE:
-        raise ValueError('minimum_confidence must be an integer from 1 to 100.')
+    if not (
+        MINIMUM_CONFIDENCE_THRESHOLD_MIN
+        <= minimum_confidence_threshold
+        <= MINIMUM_CONFIDENCE_THRESHOLD_MAX
+    ):
+        raise ValueError(error_message)
 
-    return minimum_confidence
+    return minimum_confidence_threshold
 
 
-def filter_indicators_by_confidence(
+def filter_indicators_by_minimum_confidence_threshold(
     indicators: list[dict],
-    minimum_confidence: int,
+    minimum_confidence_threshold: int,
 ) -> tuple[list[dict], int, int]:
     """
     Select indicators whose STIX confidence meets the inclusive threshold.
@@ -51,7 +58,9 @@ def filter_indicators_by_confidence(
     values are excluded. Returns selected indicators and counts of indicators
     excluded for low and invalid confidence respectively.
     """
-    minimum_confidence = validate_minimum_confidence(minimum_confidence)
+    minimum_confidence_threshold = validate_minimum_confidence_threshold(
+        minimum_confidence_threshold,
+    )
     selected = []
     below_threshold = 0
     invalid_confidence = 0
@@ -61,13 +70,13 @@ def filter_indicators_by_confidence(
 
         if (
             isinstance(confidence, bool)
-            or not isinstance(confidence, (int, float))
-            or not 0 <= confidence <= MAX_CONFIDENCE
+            or not isinstance(confidence, int)
+            or not 0 <= confidence <= MINIMUM_CONFIDENCE_THRESHOLD_MAX
         ):
             invalid_confidence += 1
             continue
 
-        if confidence < minimum_confidence:
+        if confidence < minimum_confidence_threshold:
             below_threshold += 1
             continue
 

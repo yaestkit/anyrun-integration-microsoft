@@ -237,7 +237,7 @@
         "WaitSection"
       ],
       "properties": {
-        "packageUri": "https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-ti-feeds-confidence-filter/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE/Function%20App/ANYRUN-Feeds-MDE-FA.zip",
+        "packageUri": "https://github.com/anyrun/anyrun-integration-microsoft/raw/refs/heads/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE/Function%20App/ANYRUN-Feeds-MDE-FA.zip",
         "remoteBuild": true
       }
     },
