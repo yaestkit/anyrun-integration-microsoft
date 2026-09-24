@@ -96,7 +96,7 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 
 - Click below to deploy Azure Function App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FFunction%2520App%2FANYRUN-Feeds-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fadd-install-script%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FFunction%2520App%2FANYRUN-Feeds-MDE-FA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 
@@ -120,7 +120,7 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 
 - Click below to deploy Azure Logic App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FLogic%2520App%2FANYRUN-Feeds-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fadd-install-script%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FLogic%2520App%2FANYRUN-Feeds-MDE-LA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 
@@ -133,7 +133,7 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 | logicAppName                    | Workflow name.                                                              |
 | intervalRecurrence              | Interval of recurrence for the logic app (in hours).                        |
 | feedFetchDepth                  | Depth of the feed to fetch (in days).                                       |
-| minimumConfidenceThreshold      | Minimum STIX confidence threshold, from 1 to 100 (default: 50).             |
+| minimum_confidence_threshold    | Minimum STIX confidence threshold, from 1 to 100 (default: 50).             |
 | functionAppName                 | Name of the Function App deployed before.                                   |
 
 ## Logic App Configuration (Optional)
@@ -152,17 +152,16 @@ You can change the recurrence interval at which the Logic App will run and updat
 
 You can change the fetch depth of indicators in ANY.RUN TI Feeds. This parameter determines the period for which to extract data from ANY.RUN TI Feeds.
 
-- Open your Logic App **ANYRUN-Feeds-MDE-LA**, navigate to **Development tools** > **Logic app designer**.
+- Open your Logic App ANYRUN-Feeds-MDE-LA, navigate to **Development tools** > **Logic app designer**.
 
 - Select the `Initialize variables` action and specify the required value in days in the `feed_fetch_depth` variable.
 
+![feed_fetch_depth](images/013.png)
 
-### Minimum Confidence Threshold
+### Minimum Indicator Confidence
 
 The connector filters every newly downloaded batch before importing it into Microsoft Defender for Endpoint. Only indicators whose STIX `confidence` value is greater than or equal to the Logic App's `minimum_confidence_threshold` variable are imported. The default value is `50`; adjust it when you are ready to evaluate indicators with a different confidence level.
 
 - Open your Logic App **ANYRUN-Feeds-MDE-LA**, navigate to **Development tools** > **Logic app designer**.
-
 - Open the `Initialize variables` action and change the value of `minimum_confidence_threshold` to an integer from `1` to `100`.
-
-![feed_fetch_depth](images/013.png)
+- Save the Logic App. The new threshold applies to the next downloaded feed batch without redeploying the workflow.

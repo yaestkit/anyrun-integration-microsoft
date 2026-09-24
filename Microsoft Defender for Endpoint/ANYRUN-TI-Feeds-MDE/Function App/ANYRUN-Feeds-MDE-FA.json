@@ -206,7 +206,8 @@
       "scope": "[concat('Microsoft.Storage/storageAccounts', '/', parameters('AzureStorageAccountName'))]",
       "properties": {
         "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('storageRoleDefinitionId'))]",
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2023-12-01', 'Full').identity.principalId]"
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2023-12-01', 'Full').identity.principalId]",
+        "principalType": "ServicePrincipal"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName'))]",
@@ -214,30 +215,14 @@
       ]
     },
     {
-      "type": "Microsoft.Resources/deploymentScripts",
-      "apiVersion": "2020-10-01",
-      "name": "WaitSection",
-      "location": "[resourceGroup().location]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
-      ],
-      "kind": "AzurePowerShell",
-      "properties": {
-        "azPowerShellVersion": "7.0",
-        "scriptContent": "start-sleep -Seconds 30",
-        "cleanupPreference": "Always",
-        "retentionInterval": "PT1H"
-      }
-    },
-    {
       "type": "Microsoft.Web/sites/extensions",
       "apiVersion": "2022-09-01",
       "name": "[format('{0}/{1}', parameters('functionAppName'), 'onedeploy')]",
       "dependsOn": [
-        "WaitSection"
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName')), variables('storageRoleDefinitionId'), 'feeds'))]"
       ],
       "properties": {
-        "packageUri": "https://github.com/anyrun/anyrun-integration-microsoft/raw/refs/heads/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE/Function%20App/ANYRUN-Feeds-MDE-FA.zip",
+        "packageUri": "https://github.com/yaestkit/anyrun-integration-microsoft/raw/refs/heads/feat/add-install-script/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE/Function%20App/ANYRUN-Feeds-MDE-FA.zip",
         "remoteBuild": true
       }
     },
