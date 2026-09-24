@@ -291,7 +291,11 @@ function Ensure-Module {
   $loaded = Get-Module -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
   if ($loaded) {
     if ($anchorRoot -and (Get-ModuleInstallationRoot -ModuleInfo $loaded) -ne $anchorRoot) {
-      throw "PowerShell module '$Name' is already loaded from a different module bundle. Restart Cloud Shell, then run the installer again; PowerShell cannot replace loaded module assemblies safely."
+      # Cloud Shell can preload a CurrentUser submodule alongside its system
+      # Az.Accounts module. If PowerShell has already loaded both successfully,
+      # do not attempt to replace either one in-process. Validate the cmdlets
+      # below and continue with the established session instead.
+      Write-Host "  WARNING: $Name $($loaded.Version) is already loaded from a different module bundle; retaining the loaded module and validating required commands." -ForegroundColor Yellow
     }
     if ($loaded.Version -lt $MinimumVersion) {
       Write-Host "  Using Cloud Shell's bundled $Name $($loaded.Version) (validated by required-command checks; tested version is $MinimumVersion)." -ForegroundColor Yellow
