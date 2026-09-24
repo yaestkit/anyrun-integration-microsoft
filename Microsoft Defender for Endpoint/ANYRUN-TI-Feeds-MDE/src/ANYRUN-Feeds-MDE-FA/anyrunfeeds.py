@@ -10,9 +10,8 @@ from anyrun.connectors import FeedsConnector
 
 from .config import Config
 from .utils import (
-    DEFAULT_MINIMUM_CONFIDENCE_THRESHOLD,
     extract_indicator_data,
-    filter_indicators_by_minimum_confidence_threshold,
+    filter_indicators_by_confidence,
     get_description,
     get_env_variable,
     get_severity,
@@ -24,20 +23,13 @@ DATE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 class AnyRunFeeds:
     """ Class - wrapper to interact with MS Defender and ANY.RUN REST API """
-    def __init__(
-        self,
-        log,
-        feed_fetch_depth: int,
-        minimum_confidence_threshold: int = DEFAULT_MINIMUM_CONFIDENCE_THRESHOLD,
-    ) -> None:
+    def __init__(self, log, feed_fetch_depth: int, minimum_confidence_threshold: int = 50) -> None:
         self._headers = None
         self._config = Config
         self._log = log
 
         self._feed_fetch_depth = int(feed_fetch_depth)
-        self._minimum_confidence_threshold = validate_minimum_confidence_threshold(
-            minimum_confidence_threshold,
-        )
+        self._minimum_confidence_threshold = validate_minimum_confidence_threshold(minimum_confidence_threshold)
 
         self._authenticate()
 
@@ -137,11 +129,9 @@ class AnyRunFeeds:
         )
 
         downloaded_indicators = feeds.get('objects') or []
-        indicators, below_threshold, invalid_confidence = (
-            filter_indicators_by_minimum_confidence_threshold(
-                downloaded_indicators,
-                self._minimum_confidence_threshold,
-            )
+        indicators, below_threshold, invalid_confidence = filter_indicators_by_confidence(
+            downloaded_indicators,
+            self._minimum_confidence_threshold,
         )
 
         self._log.info(

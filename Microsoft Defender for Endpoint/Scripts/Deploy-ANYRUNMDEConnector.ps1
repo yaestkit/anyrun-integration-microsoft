@@ -245,20 +245,95 @@ function ConvertTo-PowerShellLiteral {
   return "'$escapedValue'"
 }
 
+function Get-ModuleInstallationRoot {
+  param([Parameter(Mandatory = $true)]$ModuleInfo)
+  return (Split-Path -Parent (Split-Path -Parent $ModuleInfo.ModuleBase))
+}
+
+function Assert-ModuleCommands {
+  param(
+    [Parameter(Mandatory = $true)][string]$ModuleName,
+    [string[]]$RequiredCommands = @()
+  )
+  $missingCommands = @($RequiredCommands | Where-Object {
+    -not (Get-Command -Name $_ -ErrorAction SilentlyContinue)
+  })
+  if ($missingCommands.Count -gt 0) {
+    throw "PowerShell module '$ModuleName' is loaded but does not provide required commands: $($missingCommands -join ', '). Open a fresh Cloud Shell session after updating its module bundle."
+  }
+}
+
 function Ensure-Module {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
-    [Parameter(Mandatory = $true)][Version]$MinimumVersion
+    [Parameter(Mandatory = $true)][Version]$MinimumVersion,
+    [string[]]$RequiredCommands = @()
   )
-  $compatible = Get-Module -ListAvailable -Name $Name |
-    Where-Object Version -ge $MinimumVersion |
-    Sort-Object Version -Descending |
-    Select-Object -First 1
-  if (-not $compatible) {
+
+  # Azure Cloud Shell preloads a mutually compatible Az module bundle. Importing
+  # a newer CurrentUser submodule into that process can load a second private
+  # assembly (for example Az.Authorization.private) and fail. Once a module
+  # family is loaded, always select siblings from the same installation root.
+  $anchorName = if ($Name -like "Az.*") {
+    "Az.Accounts"
+  } elseif ($Name -like "Microsoft.Graph.*") {
+    "Microsoft.Graph.Authentication"
+  } else {
+    $null
+  }
+  $anchor = if ($anchorName) {
+    Get-Module -Name $anchorName | Sort-Object Version -Descending | Select-Object -First 1
+  } else {
+    $null
+  }
+  $anchorRoot = if ($anchor) { Get-ModuleInstallationRoot -ModuleInfo $anchor } else { $null }
+
+  $loaded = Get-Module -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+  if ($loaded) {
+    if ($anchorRoot -and (Get-ModuleInstallationRoot -ModuleInfo $loaded) -ne $anchorRoot) {
+      throw "PowerShell module '$Name' is already loaded from a different module bundle. Restart Cloud Shell, then run the installer again; PowerShell cannot replace loaded module assemblies safely."
+    }
+    if ($loaded.Version -lt $MinimumVersion) {
+      Write-Host "  Using Cloud Shell's bundled $Name $($loaded.Version) (validated by required-command checks; tested version is $MinimumVersion)." -ForegroundColor Yellow
+    }
+    Assert-ModuleCommands -ModuleName $Name -RequiredCommands $RequiredCommands
+    return
+  }
+
+  $available = @(Get-Module -ListAvailable -Name $Name)
+  $selected = if ($anchorRoot) {
+    $available | Where-Object {
+      (Get-ModuleInstallationRoot -ModuleInfo $_) -eq $anchorRoot
+    } | Sort-Object Version -Descending | Select-Object -First 1
+  } else {
+    $available | Where-Object Version -ge $MinimumVersion |
+      Sort-Object Version -Descending | Select-Object -First 1
+  }
+
+  if (-not $selected -and $anchorRoot -and $Name -like "Microsoft.Graph.*") {
+    Write-Host "  Installing PowerShell module '$Name' $($anchor.Version) to match the loaded Graph module bundle..." -ForegroundColor Yellow
+    Install-Module -Name $Name -RequiredVersion $anchor.Version -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+    $selected = Get-Module -ListAvailable -Name $Name | Where-Object {
+      (Get-ModuleInstallationRoot -ModuleInfo $_) -eq $anchorRoot -and $_.Version -eq $anchor.Version
+    } | Select-Object -First 1
+  }
+  if (-not $selected -and $anchorRoot) {
+    throw "PowerShell module '$Name' is not present in the currently loaded '$anchorName' bundle. Restart Cloud Shell before changing Az/Graph module versions; mixing module bundles in one process is unsafe."
+  }
+  if (-not $selected) {
     Write-Host "  Installing PowerShell module '$Name' (minimum $MinimumVersion) for the current user..." -ForegroundColor Yellow
     Install-Module -Name $Name -MinimumVersion $MinimumVersion -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+    $selected = Get-Module -ListAvailable -Name $Name |
+      Where-Object Version -ge $MinimumVersion |
+      Sort-Object Version -Descending |
+      Select-Object -First 1
   }
-  Import-Module -Name $Name -MinimumVersion $MinimumVersion -ErrorAction Stop
+  if (-not $selected) { throw "PowerShell module '$Name' could not be located after installation." }
+  if ($selected.Version -lt $MinimumVersion) {
+    Write-Host "  Using Cloud Shell's bundled $Name $($selected.Version) (validated by required-command checks; tested version is $MinimumVersion)." -ForegroundColor Yellow
+  }
+  Import-Module -FullyQualifiedName @{ ModuleName = $Name; RequiredVersion = $selected.Version } -ErrorAction Stop
+  Assert-ModuleCommands -ModuleName $Name -RequiredCommands $RequiredCommands
 }
 
 function ConvertFrom-AzRestContent {
@@ -310,7 +385,7 @@ function Test-EffectiveRoleAssignmentPermission {
 function Assert-FlexConsumptionRegion {
   param([Parameter(Mandatory = $true)][string]$Location)
 
-  Ensure-Module "Az.Functions" -MinimumVersion "5.0.1"
+  Ensure-Module "Az.Functions" -MinimumVersion "5.0.1" -RequiredCommands @("Get-AzFunctionAppAvailableLocation")
   $locations = @(Get-AzFunctionAppAvailableLocation -PlanType FlexConsumption -SubscriptionId $SubscriptionId)
   $requested = $Location.Replace(" ", "").ToLowerInvariant()
   $match = $locations | Where-Object {
@@ -1027,20 +1102,38 @@ function New-PreparedFunctionTemplate {
   }
 
   $expectedPackageHash = if ($ConnectorType -eq "Sandbox") { $SandboxPackageSha256 } else { $FeedsPackageSha256 }
-  if ($expectedPackageHash) {
-    $packagePath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-package-$([Guid]::NewGuid().ToString('N')).zip"
+  $packagePath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-package-$([Guid]::NewGuid().ToString('N')).zip"
+  try {
+    Write-Step "Checking the $ConnectorType Function package declared by the template..."
+    Invoke-WebRequest -Uri $packageUri -OutFile $packagePath
+    $actualPackageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
+
+    $archive = $null
     try {
-      Invoke-WebRequest -Uri $packageUri -OutFile $packagePath
-      $actualPackageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
-      if ($actualPackageHash -ne $expectedPackageHash) {
-        throw "$ConnectorType package SHA-256 mismatch. Expected $expectedPackageHash but downloaded $actualPackageHash."
+      $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
+      $entryNames = @($archive.Entries | ForEach-Object FullName)
+      $functionDirectory = if ($ConnectorType -eq "Sandbox") { "ANYRUN-Sandbox-MDE-FA" } else { "ANYRUN-Feeds-MDE-FA" }
+      $requiredEntries = @("host.json", "requirements.txt", "$functionDirectory/function.json")
+      $missingEntries = @($requiredEntries | Where-Object { $entryNames -notcontains $_ })
+      if ($missingEntries.Count -gt 0) {
+        throw "$ConnectorType package is missing required ZIP entries: $($missingEntries -join ', ')."
       }
-      Write-Host "  Verified $ConnectorType Function package SHA-256." -ForegroundColor Green
+    } catch {
+      throw "$ConnectorType package at '$packageUri' is not a valid Function deployment ZIP: $($_.Exception.Message)"
     } finally {
-      Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
+      if ($archive) { $archive.Dispose() }
     }
-  } else {
-    Write-Host "  WARNING: no package SHA-256 was supplied; the package URI declared by the template will be used without content-hash verification." -ForegroundColor Yellow
+
+    if ($expectedPackageHash -and $actualPackageHash -ne $expectedPackageHash) {
+      throw "$ConnectorType package SHA-256 mismatch. Expected $expectedPackageHash but downloaded $actualPackageHash."
+    }
+    if ($expectedPackageHash) {
+      Write-Host "  Verified $ConnectorType Function package SHA-256 ($actualPackageHash)." -ForegroundColor Green
+    } else {
+      Write-Host "  WARNING: no expected package SHA-256 was supplied. The ZIP is downloadable and structurally valid; observed SHA-256 is $actualPackageHash." -ForegroundColor Yellow
+    }
+  } finally {
+    Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
   }
 
   # The upstream templates use a fixed 30-second deploymentScript. Besides
@@ -1136,6 +1229,38 @@ function Test-ArmDeployment {
   Write-Host "  $Label ARM validation succeeded." -ForegroundColor Green
 }
 
+function Get-DeploymentOperationDiagnostic {
+  param([Parameter(Mandatory = $true)]$Operation)
+
+  $target = Get-ObjectPropertyValue -InputObject $Operation -Name "TargetResource"
+  $resourceName = $null
+  if ($target -is [string]) {
+    $resourceName = $target
+  } elseif ($target) {
+    $resourceName = Get-ObjectPropertyValue -InputObject $target -Name "ResourceName"
+    if (-not $resourceName) { $resourceName = Get-ObjectPropertyValue -InputObject $target -Name "Id" }
+    if (-not $resourceName) { $resourceName = Get-ObjectPropertyValue -InputObject $target -Name "ResourceType" }
+  }
+  if (-not $resourceName) {
+    $resourceName = Get-ObjectPropertyValue -InputObject $Operation -Name "OperationId"
+  }
+  if (-not $resourceName) { $resourceName = "unknown resource" }
+
+  $statusMessage = Get-ObjectPropertyValue -InputObject $Operation -Name "StatusMessage"
+  if (-not $statusMessage) {
+    $statusMessage = Get-ObjectPropertyValue -InputObject $Operation -Name "ProvisioningState"
+  }
+  if ($statusMessage -and $statusMessage -isnot [string]) {
+    $statusMessage = $statusMessage | ConvertTo-Json -Depth 20 -Compress
+  }
+  if (-not $statusMessage) { $statusMessage = "No status message was returned by Azure." }
+
+  return [pscustomobject]@{
+    Resource = "$resourceName"
+    Message  = "$statusMessage"
+  }
+}
+
 function Invoke-ArmDeployment {
   param(
     [string]$Label,
@@ -1176,29 +1301,36 @@ function Invoke-ArmDeployment {
       $message = "$($_.Exception.Message) $errorDetails"
       $failedOperations = @(Get-AzResourceGroupDeploymentOperation -ResourceGroupName $ResourceGroup `
         -DeploymentName $deploymentName -ErrorAction SilentlyContinue |
-        Where-Object ProvisioningState -eq "Failed")
-      $operationMessages = @($failedOperations | ForEach-Object {
-        if ($_.StatusMessage) { "$($_.StatusMessage)" } else { "$($_.ProvisioningState)" }
-      }) -join " `n"
+        Where-Object { (Get-ObjectPropertyValue -InputObject $_ -Name "ProvisioningState") -eq "Failed" })
+      $operationDiagnostics = @($failedOperations | ForEach-Object {
+        Get-DeploymentOperationDiagnostic -Operation $_
+      })
+      $operationMessages = @($operationDiagnostics | ForEach-Object { $_.Message }) -join " `n"
       $message = "$message $operationMessages"
 
       $identityNotReady = $message -match 'PrincipalNotFound|replication delay|does not exist in the directory'
+      $onedeployFailed = @($operationDiagnostics | Where-Object {
+        $_.Resource -match '(?i)(?:/|\\)extensions(?:/|\\)onedeploy$|sites/extensions.*onedeploy'
+      }).Count -gt 0
       $packageRbacNotReady = $message -match 'AuthorizationPermissionMismatch' -or (
         $message -match '(?i)(?:status\s*code|http)?\s*403|Forbidden' -and
         $message -match '(?i)onedeploy|sites/extensions|package|blob|storage'
-      )
+      ) -or $onedeployFailed
       if ($attempt -lt $maxAttempts -and ($identityNotReady -or $packageRbacNotReady)) {
         $waitSeconds = if ($packageRbacNotReady) { 45 } else { 30 }
-        $reason = if ($packageRbacNotReady) { "Storage data-plane RBAC has not propagated to onedeploy" } else { "Managed identity has not replicated" }
+        $reason = if ($packageRbacNotReady) { "onedeploy failed while package access or Storage RBAC may still be propagating" } else { "Managed identity has not replicated" }
         Write-Host "  $reason; waiting $waitSeconds seconds before retry." -ForegroundColor Yellow
         Start-Sleep -Seconds $waitSeconds
         continue
       }
       Write-Host "  Failed deployment operations:" -ForegroundColor Yellow
-      $failedOperations | ForEach-Object {
-          $statusMessage = if ($_.StatusMessage) { $_.StatusMessage } else { $_.ProvisioningState }
-          Write-Host "    $($_.TargetResource.ResourceName): $statusMessage" -ForegroundColor Yellow
+      if ($operationDiagnostics.Count -eq 0) {
+        Write-Host "    $message" -ForegroundColor Yellow
+      } else {
+        $operationDiagnostics | ForEach-Object {
+          Write-Host "    $($_.Resource): $($_.Message)" -ForegroundColor Yellow
         }
+      }
       throw
     }
   }
@@ -1306,12 +1438,28 @@ if ($RotateClientSecret -and $SkipFunctionApp) {
 
 Write-Phase "0" "Pre-flight"
 Write-Step "Loading required PowerShell modules..."
-Ensure-Module "Az.Accounts" -MinimumVersion "5.5.3"
-Ensure-Module "Az.Resources" -MinimumVersion "10.2.1"
-Ensure-Module "Az.Storage" -MinimumVersion "9.7.2"
-Ensure-Module "Az.OperationalInsights" -MinimumVersion "3.4.1"
-Ensure-Module "Microsoft.Graph.Authentication" -MinimumVersion "2.40.0"
-Ensure-Module "Microsoft.Graph.Applications" -MinimumVersion "2.40.0"
+Ensure-Module "Az.Accounts" -MinimumVersion "5.5.3" -RequiredCommands @(
+  "Connect-AzAccount", "Get-AzAccessToken", "Get-AzContext", "Get-AzSubscription", "Invoke-AzRestMethod", "Set-AzContext"
+)
+Ensure-Module "Az.Resources" -MinimumVersion "10.2.1" -RequiredCommands @(
+  "Get-AzResource", "Get-AzResourceGroup", "Get-AzResourceGroupDeploymentOperation", "Get-AzResourceProvider",
+  "Get-AzRoleAssignment", "New-AzResourceGroup", "New-AzResourceGroupDeployment", "Register-AzResourceProvider",
+  "Remove-AzResource", "Remove-AzRoleAssignment", "Test-AzResourceGroupDeployment"
+)
+Ensure-Module "Az.Storage" -MinimumVersion "9.7.2" -RequiredCommands @(
+  "Get-AzStorageAccount", "Get-AzStorageAccountKey", "Get-AzStorageAccountNameAvailability", "New-AzStorageAccount"
+)
+Ensure-Module "Az.OperationalInsights" -MinimumVersion "3.4.1" -RequiredCommands @(
+  "Get-AzOperationalInsightsWorkspace", "New-AzOperationalInsightsWorkspace"
+)
+Ensure-Module "Microsoft.Graph.Authentication" -MinimumVersion "2.40.0" -RequiredCommands @(
+  "Connect-MgGraph", "Disconnect-MgGraph", "Get-MgContext"
+)
+Ensure-Module "Microsoft.Graph.Applications" -MinimumVersion "2.40.0" -RequiredCommands @(
+  "Add-MgApplicationPassword", "Get-MgApplication", "Get-MgServicePrincipal", "Get-MgServicePrincipalAppRoleAssignment",
+  "New-MgApplication", "New-MgServicePrincipal", "New-MgServicePrincipalAppRoleAssignment", "Remove-MgApplicationPassword",
+  "Remove-MgServicePrincipalAppRoleAssignment", "Update-MgApplication"
+)
 
 $azureContext = Connect-AzureSmart -RequestedTenantId $TenantId -RequestedSubscriptionId $SubscriptionId
 $TenantId = $azureContext.Tenant.Id

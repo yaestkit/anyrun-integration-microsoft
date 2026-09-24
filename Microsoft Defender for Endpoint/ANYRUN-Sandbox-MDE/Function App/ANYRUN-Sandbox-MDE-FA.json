@@ -284,7 +284,7 @@
         "[resourceId('Microsoft.Resources/deployments', 'AssignFunctionStorageRole')]"
       ],
       "properties": {
-        "packageUri": "https://github.com/yaestkit/anyrun-integration-microsoft/raw/refs/heads/feat/add-install-script/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip",
+        "packageUri": "https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/add-install-script/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip",
         "remoteBuild": true
       }
     },

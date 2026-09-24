@@ -20,7 +20,7 @@
                 "description": "Depth of the feed to fetch (in days)"
             }
         },
-        "minimumConfidenceThreshold": {
+        "minimum_confidence_threshold": {
             "defaultValue": 50,
             "type": "int",
             "minValue": 1,
@@ -45,7 +45,7 @@
             "type": "Microsoft.Logic/workflows",
             "apiVersion": "2017-07-01",
             "name": "[parameters('logicAppName')]",
-            "location": "eastus",
+            "location": "[resourceGroup().location]",
             "tags": {
                 "Resource": "Microsoft Defender XDR",
                 "PlaybookTrigger": "Incident",
@@ -101,7 +101,7 @@
                                     {
                                         "name": "minimum_confidence_threshold",
                                         "type": "integer",
-                                        "value": "[parameters('minimumConfidenceThreshold')]"
+                                        "value": "[parameters('minimum_confidence_threshold')]"
                                     }
                                 ]
                             }
