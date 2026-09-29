@@ -287,6 +287,9 @@ class DeploymentScriptTests(unittest.TestCase):
         body = body.split("function New-PreparedFunctionTemplate", 1)[0]
         self.assertIn("sites/$($FunctionAppName)?api-version=2024-11-01", body)
         self.assertNotRegex(body, r"\$[A-Za-z_][A-Za-z0-9_]*\?")
+        self.assertIn('Get-ObjectPropertyValue -InputObject $site -Name "identity"', body)
+        self.assertIn("Get-ObjectPropertyValue -InputObject $identity -Name 'principalId'", body)
+        self.assertNotIn("$site.identity.principalId", body)
         self.assertIn("$legacyNames -contains $_.RoleAssignmentName", body)
         self.assertIn("$_.ObjectId.ToString() -eq $principalId", body)
 

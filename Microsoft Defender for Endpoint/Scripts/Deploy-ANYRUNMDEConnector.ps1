@@ -1290,7 +1290,10 @@ function Remove-LegacyStorageRoleAssignment {
   try {
     $site = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $sitePath)
   } catch { return }
-  $principalId = "$($site.identity.principalId)"
+  if (-not $site) { return }
+  $identity = Get-ObjectPropertyValue -InputObject $site -Name "identity"
+  if (-not $identity) { return }
+  $principalId = "$(Get-ObjectPropertyValue -InputObject $identity -Name 'principalId')"
   if ($principalId -notmatch '^[0-9a-fA-F-]{36}$') { return }
 
   $legacyNames = [System.Collections.Generic.List[string]]::new()
