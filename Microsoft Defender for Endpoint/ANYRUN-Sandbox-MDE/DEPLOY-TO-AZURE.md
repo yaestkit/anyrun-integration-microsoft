@@ -4,9 +4,11 @@ The automated installer is the recommended path because it validates identities,
 permissions, artifacts, and both ARM templates. See
 [`../AUTOMATED-DEPLOYMENT.md`](../AUTOMATED-DEPLOYMENT.md).
 
-The direct buttons below track the official `main` branch and therefore are not
-immutable releases. Use them only after reviewing the referenced commit. The
-installer resolves `main` to a commit and verifies SHA-256 values before deploy.
+The direct buttons below track the reviewed test branch
+`yaestkit/anyrun-integration-microsoft@feat/mde-async-and-feed-hardening` and
+therefore are not immutable releases. Use them only after reviewing the
+referenced commit. The installer resolves the branch to a commit and verifies
+SHA-256 values before deploy.
 
 The deploying account needs
 `Microsoft.Authorization/roleAssignments/write` at the Storage Account scope.
@@ -48,17 +50,17 @@ open the analysis.
 
 ## Function App
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
 
 ARM template:
-<https://raw.githubusercontent.com/anyrun/anyrun-integration-microsoft/refs/heads/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.json>
+<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.json>
 
 Function package:
-<https://raw.githubusercontent.com/anyrun/anyrun-integration-microsoft/refs/heads/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip>
+<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip>
 
 ## Logic App
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
 
 ARM template:
-<https://raw.githubusercontent.com/anyrun/anyrun-integration-microsoft/refs/heads/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Logic%20App/ANYRUN-Sandbox-MDE-LA.json>
+<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Logic%20App/ANYRUN-Sandbox-MDE-LA.json>

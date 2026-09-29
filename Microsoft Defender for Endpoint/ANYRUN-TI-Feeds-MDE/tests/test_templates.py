@@ -96,8 +96,8 @@ class FunctionAppTemplateTests(unittest.TestCase):
         )
         package_uri = extension['properties']['packageUri']
         self.assertTrue(package_uri.startswith('https://raw.githubusercontent.com/'))
-        self.assertIn('/anyrun/anyrun-integration-microsoft/', package_uri)
-        self.assertIn('/refs/heads/main/', package_uri)
+        self.assertIn('/yaestkit/anyrun-integration-microsoft/', package_uri)
+        self.assertIn('/refs/heads/feat/mde-async-and-feed-hardening/', package_uri)
         self.assertNotRegex(package_uri, r'/[0-9a-f]{40}/')
 
     def test_deployment_zip_contains_the_reviewed_sources(self):

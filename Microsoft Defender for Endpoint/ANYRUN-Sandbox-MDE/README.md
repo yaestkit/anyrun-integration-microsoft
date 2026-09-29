@@ -24,6 +24,11 @@ This connector empowers SOC teams with deeper insights into potential threats, a
   - Function App Flex Consumption plan
   - Blob Storage
 
+For production deployments, use the automated installer described in
+[`../AUTOMATED-DEPLOYMENT.md`](../AUTOMATED-DEPLOYMENT.md). Manual ARM deployment
+details and the asynchronous runtime model are documented in
+[`DEPLOY-TO-AZURE.md`](DEPLOY-TO-AZURE.md).
+
 ## Solution Overview
 
 ## Prerequisites
@@ -74,14 +79,16 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 
 |       Category       |   Permission Name   | Description                                                            |
 |----------------------|---------------------|------------------------------------------------------------------------|
-| Alert                | Alert.Read.All      | Needed to retrieve alerts and related evidence                         |
 | Alert                | Alert.ReadWrite.All | Needed to enrich alerts with sample information                        |
-| Machine              | Machine.LiveResponse | Needed to gather evidences from machines                               |
-| Machine              | Machine.Read.All    | Needed to retrieve information about machines                          |
-| Ti                   | Ti.Read.All         | Needed to retrieve indicators                                          |
-| Ti                   | Ti.ReadWrite        | Needed to retrieve and submit indicators (application specific)        |
-| Ti                   | Ti.ReadWrite.All    | Needed to retrieve and submit indicators (general)                     |
+| Machine              | Machine.LiveResponse | Starts and cancels Live Response actions                              |
+| Machine              | Machine.Read.All    | Retrieves machine information                                         |
+| Machine              | Machine.ReadWrite.All | Lists and reads MachineAction objects and downloads Live Response results |
+| Ti                   | Ti.ReadWrite        | Submits indicators found by ANY.RUN                                   |
 | Library              | Library.Manage      | Needed to upload custom ps1 script for retrieving AV related evidences |
+
+`Machine.ReadWrite.All` is required for application tokens by the
+`machineactions` and `GetLiveResponseResultDownloadLink` APIs. Granting only
+`Machine.LiveResponse` is not sufficient for this connector.
 
 ### Storage Account
 
@@ -115,7 +122,7 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 
 - Click below to deploy Azure Function App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
 
 - Enter the parameters required for deploying the Function App and click **Review + create**.
 
@@ -134,13 +141,55 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 | AzureStorageConnectionString | Azure Blob Storage Account Connection string.                               |
 | AzureBlobContainerName       | Azure Blob Storage Container Name.                                          |
 | ANYRUN_API_KEY               | API Key of your ANY.RUN Account.                                            |
+| DefenderIndicatorAction      | `Audit` (default) or `Block` for malicious/suspicious indicators.           |
+| DefenderIndicatorGenerateAlert | Generate a Defender alert on IOC match; disabled by default.              |
+| ConfigureEvidenceLifecyclePolicy | Add one-day blob cleanup. Enable only for a dedicated Storage Account.  |
 | LogAnalyticsWorkspaceName    | Log Analytics Workspace Name.                                               |
+
+### Asynchronous execution
+
+The Logic App call only validates and queues the request. The HTTP Function
+returns `202 Accepted` immediately, and `ANYRUN-Sandbox-MDE-Worker` performs
+Live Response, waits for ANY.RUN, and enriches the alert. The Logic App action
+uses `DisableAsyncPattern` because this fire-and-forget response intentionally
+has no `Location` status endpoint. A successful Logic App run means “queued,”
+not “analysis completed.” Follow the `job_id` in Function/Application Insights
+logs and in failure comments added to the Defender alert.
+
+Live Response permits only one active session per device. RunScript can execute
+for up to 10 minutes. The connector limits its own wait to 15 minutes and does
+not cancel another product's session. Avoid running this connector and a
+Sentinel playbook against the same device pool.
+
+The worker also has a 90-minute application deadline, leaving time to add a
+failure comment before the two-hour Azure Functions timeout. A missing EDR file
+does not stop the remaining files or URLs. The AV script succeeds when at least
+one requested file was uploaded; Python then reports missing blobs individually.
+If RunScript itself fails, the connector makes a best-effort cleanup of every
+planned blob.
+
+Defender rejects script parameters containing shell metacharacters such as
+`; & | ! $ ( )`. The connector therefore uses a versioned Base64URL envelope.
+The Antivirus collection path uses a random blob name and a 30-minute,
+create-only SAS scoped to that single blob.
+
+The Function template contains an optional one-day lifecycle rule as a final
+safety net for orphan evidence. Keep `ConfigureEvidenceLifecyclePolicy=false`
+for a shared or existing Storage Account: Azure stores one lifecycle-policy
+document per account, so replacing it could affect unrelated rules. The
+automated installer enables this policy only when it created a dedicated
+Sandbox Storage Account.
+
+The `analysisPrivacyType` Logic App parameter defaults to `owner`. Private tasks
+require a compatible ANY.RUN plan; select `bylink` during deployment if the
+account does not support `owner`. A by-link analysis is accessible to anyone
+who obtains its link and should be an explicit organizational decision.
 
 ### Deploy Azure Logic App
 
 - Click below to deploy Azure Logic App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 
@@ -155,6 +204,7 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 | azureClientId                   | Azure Client ID for authentication (ID of the App Registration created before). |
 | azureClientSecret               | Azure Client Secret for authentication.                                     |
 | functionAppName                 | Name of the Function App deplyed before.                                    |
+| analysisPrivacyType             | `owner` (default, private-plan support required) or `bylink`.                |
 
 
 ## Microsoft Defender for Endpoint Configuration

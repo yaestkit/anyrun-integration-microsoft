@@ -128,14 +128,14 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn("if ($script:GraphSessionOwned)", final)
         self.assertIn("Disconnect-MgGraph", final)
 
-    def test_official_repository_ref_is_resolved_to_commit(self):
-        self.assertIn('[string]$Repository = "anyrun/anyrun-integration-microsoft"', self.text)
-        self.assertIn('[string]$RepositoryRef = "refs/heads/main"', self.text)
+    def test_reviewed_repository_ref_is_resolved_to_commit(self):
+        self.assertIn('[string]$Repository = "yaestkit/anyrun-integration-microsoft"', self.text)
+        self.assertIn('[string]$RepositoryRef = "refs/heads/feat/mde-async-and-feed-hardening"', self.text)
         body = self.text.split("function Resolve-RepositoryCommit", 1)[1]
         body = body.split("function Get-VerifiedRemoteFile", 1)[0]
         self.assertIn("api.github.com/repos/$RepositoryName/commits/$encodedRef", body)
         self.assertIn("^[0-9a-fA-F]{40}$", body)
-        self.assertLess(body.index("is not the official ANY.RUN integration repository"), body.index("^[0-9a-fA-F]{40}$"))
+        self.assertLess(body.index("is not the reviewed repository for this test bundle"), body.index("^[0-9a-fA-F]{40}$"))
         self.assertIn("$script:ResolvedRepositoryRef = Resolve-RepositoryCommit", self.text)
 
     def test_remote_files_require_allowlisted_https_and_sha256(self):
@@ -170,7 +170,7 @@ class DeploymentScriptTests(unittest.TestCase):
             self.assertIn("anyrun-sdk==1.14.19", locked)
 
     def test_checked_in_package_uris_are_not_commit_pinned(self):
-        expected = "raw.githubusercontent.com/anyrun/anyrun-integration-microsoft/refs/heads/main"
+        expected = "raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening"
         for path in (SANDBOX_FUNCTION, FEEDS_FUNCTION):
             template = path.read_text(encoding="utf-8")
             self.assertIn(expected, template)

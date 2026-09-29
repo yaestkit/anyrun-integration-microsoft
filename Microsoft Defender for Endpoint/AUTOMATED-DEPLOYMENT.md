@@ -100,9 +100,10 @@ adds the one-day orphan-evidence lifecycle policy only when it creates the
 dedicated Sandbox Storage Account. It does not replace the lifecycle policy of
 an existing account.
 
-The checked-in Function templates use the official repository's `main` branch
-for the **Deploy to Azure** path and are not tied to a commit. For installer runs,
-the requested repository ref is first resolved through GitHub to an immutable
+The checked-in Function templates use the reviewed test repository and branch
+`yaestkit/anyrun-integration-microsoft@feat/mde-async-and-feed-hardening` for the
+**Deploy to Azure** path and are not tied to a commit. For installer runs, the
+requested repository ref is first resolved through GitHub to an immutable
 40-character commit. Only the temporary verified deployment copy has its
 `packageUri` rewritten to that commit. This avoids a template/package time-of-
 check/time-of-use mismatch without permanently pinning checked-in templates.
@@ -243,11 +244,11 @@ overlapping delete/import cycles.
 
 ## Artifact verification and development forks
 
-Production defaults are:
+Defaults in this test bundle are:
 
 ```text
-Repository:    anyrun/anyrun-integration-microsoft
-RepositoryRef: refs/heads/main
+Repository:    yaestkit/anyrun-integration-microsoft
+RepositoryRef: refs/heads/feat/mde-async-and-feed-hardening
 ```
 
 The branch is resolved to a commit before downloading. Default SHA-256 values for
@@ -274,9 +275,13 @@ For a reviewed development fork:
 ```
 
 `-AllowUnverifiedArtifacts` is an explicit development escape hatch: it permits
-a non-official repository or hash mismatch and prints prominent warnings. Do not
-use it for production. Local template parameters are intended for offline review
-and test; the operator is responsible for the local file's provenance.
+an alternative repository or hash mismatch and prints prominent warnings. Do
+not use it for production. Local template parameters are intended for offline
+review and test; the operator is responsible for the local file's provenance.
+
+Before merging into the official repository, change the default repository,
+ref, checked-in deployment links, and Function `packageUri` values back to the
+official release branch in the same commit, then recalculate template hashes.
 
 ## Re-deployment and migration
 

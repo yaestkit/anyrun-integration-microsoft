@@ -91,9 +91,9 @@ param(
   [switch]$AllowUnverifiedArtifacts,
 
   [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
-  [string]$Repository = "anyrun/anyrun-integration-microsoft",
+  [string]$Repository = "yaestkit/anyrun-integration-microsoft",
   [ValidatePattern('^[A-Za-z0-9._/-]+$')]
-  [string]$RepositoryRef = "refs/heads/main",
+  [string]$RepositoryRef = "refs/heads/feat/mde-async-and-feed-hardening",
   [string]$SandboxFunctionTemplateUri,
   [string]$SandboxLogicTemplateUri,
   [string]$FeedsFunctionTemplateUri,
@@ -103,11 +103,11 @@ param(
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsPackageSha256 = "6f87fc5e7b5b6a51a645b3789c6b1c6756b5054c13e51374fd6b04bb6e9bcd41",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxFunctionTemplateSha256 = "77dbdfd724a5d8f21b05f4ae6d40d657c15c4c9e9babfddf3c1931c1fc7893cf",
+  [string]$SandboxFunctionTemplateSha256 = "d78b13d0e5bb284737b396929a526d1c1b321c908f1a1199de889b7d13fe5556",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$SandboxLogicTemplateSha256 = "709d43529e2aa70882027b79486770199df72fffc53a5401f1ad59f65a718387",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsFunctionTemplateSha256 = "e640c08f43cc1cbdf5b3992beb6e9aa9a67f4fea12bc58194aaabd118a1f4fdb",
+  [string]$FeedsFunctionTemplateSha256 = "075a4e0dbc0f4185ee34b6751762ee343ebab23445e623bddde6db41374c4756",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsLogicTemplateSha256 = "ddf86fc10ff613dc5df83e4d3dffc2d416fb3c78ae12c2ba18d337ea538a7d69",
   [string]$SandboxFunctionTemplateFile,
@@ -244,8 +244,8 @@ function Assert-GuidValue {
 function Resolve-RepositoryCommit {
   param([Parameter(Mandatory = $true)][string]$RepositoryName, [Parameter(Mandatory = $true)][string]$Ref)
 
-  if ($RepositoryName -ne "anyrun/anyrun-integration-microsoft" -and -not $AllowUnverifiedArtifacts) {
-    throw "Repository '$RepositoryName' is not the official ANY.RUN integration repository. Use -AllowUnverifiedArtifacts only for an explicitly reviewed development fork."
+  if ($RepositoryName -ne "yaestkit/anyrun-integration-microsoft" -and -not $AllowUnverifiedArtifacts) {
+    throw "Repository '$RepositoryName' is not the reviewed repository for this test bundle. Use -AllowUnverifiedArtifacts only for an explicitly reviewed alternative repository."
   }
   if ($Ref -match '^[0-9a-fA-F]{40}$') { return $Ref.ToLowerInvariant() }
   if ($Ref.Contains('..') -or $Ref.StartsWith('/') -or $Ref.EndsWith('/')) {
