@@ -1,205 +1,82 @@
-import os
-import logging as log
-import traceback
-from json import dumps
+from __future__ import annotations
+
+import logging
+from json import JSONDecodeError, dumps, loads
+from uuid import uuid4
 
 import azure.functions as func
-from anyrun.connectors import SandboxConnector
-from anyrun.connectors.sandbox.operation_systems import WindowsConnector, LinuxConnector
-from anyrun.connectors.sandbox.base_connector import BaseSandboxConnector
-from anyrun import RunTimeException
-
-from .defender import MicrosoftDefender
-from .utils import get_env_variable, prepare_url_analysis_options, clear_indicators
-from .config import Config
 
 
-def main(req: func.HttpRequest) -> func.HttpResponse:
-    log.info('AnyRunDefender started. Checking ANY.RUN Sandbox credentials...')
+REQUIRED_FIELDS = (
+    'alert_id',
+    'alert_source',
+    'machine_os_platform',
+    'analysis_options',
+)
+SUPPORTED_ALERT_SOURCES = {'WindowsDefenderAtp', 'WindowsDefenderAv'}
+SUPPORTED_PLATFORMS = {'windows', 'linux'}
 
-    with BaseSandboxConnector(api_key=get_env_variable('ANYRUN_API_KEY'), integration=Config.VERSION) as connector:
-        connector.check_authorization()
-        log.info('Successful credentials check.')
 
+def main(req: func.HttpRequest, job: func.Out[str]) -> func.HttpResponse:
+    """Validate a Logic App request, enqueue it, and return without waiting."""
     try:
-        alert_id = req.params.get('alert_id') or req.get_json().get('alert_id')
-        alert_source = req.params.get('alert_source') or req.get_json().get('alert_source')
-        machine_os_platform = req.params.get('machine_os_platform') or req.get_json().get('machine_os_platform')
-        analysis_options = req.params.get('analysis_options') or req.get_json().get('analysis_options')
+        body = req.get_json()
+    except (ValueError, JSONDecodeError):
+        body = {}
 
-        if not any((alert_id, alert_source, machine_os_platform, analysis_options)):
-            raise ValueError(
-                f'The following parameters: alert_id, alert_source, machine_os_platform, analysis_options'
-                f' are required.'
-            )
+    if not isinstance(body, dict):
+        return _response(400, {'message': 'The request body must be a JSON object.'})
 
-        process_alert(alert_id, alert_source, machine_os_platform, analysis_options)
-        return func.HttpResponse(
-            dumps({"message": "Successfully submitted and enriched alert"}),
-            status_code=200,
+    values = {
+        name: req.params.get(name) if req.params.get(name) is not None else body.get(name)
+        for name in REQUIRED_FIELDS
+    }
+    missing = [name for name, value in values.items() if value is None or value == '']
+    if missing:
+        return _response(400, {'message': f"Missing required fields: {', '.join(missing)}."})
+
+    if isinstance(values['analysis_options'], str):
+        try:
+            values['analysis_options'] = loads(values['analysis_options'])
+        except (TypeError, ValueError, JSONDecodeError):
+            return _response(400, {'message': 'analysis_options must be a JSON object.'})
+
+    if not isinstance(values['analysis_options'], dict):
+        return _response(400, {'message': 'analysis_options must be a JSON object.'})
+
+    if not values['analysis_options']:
+        return _response(400, {'message': 'analysis_options must not be empty.'})
+
+    if values['alert_source'] not in SUPPORTED_ALERT_SOURCES:
+        return _response(
+            400,
+            {'message': 'alert_source must be WindowsDefenderAtp or WindowsDefenderAv.'},
         )
-    except RunTimeException as error:
-        return func.HttpResponse(str(error), status_code=500)
-    except Exception:
-        error_msg = traceback.format_exc()
-        log.error(f'Unspecified exception occurred: {error_msg}')
-        log.error(error_msg)
-        return func.HttpResponse(f'Unspecified exception: {error_msg}', status_code=500)
+
+    if values['machine_os_platform'] not in SUPPORTED_PLATFORMS:
+        return _response(400, {'message': 'machine_os_platform must be windows or linux.'})
+
+    job_id = str(uuid4())
+    message = {'job_id': job_id, **values}
+    job.set(dumps(message))
+
+    logging.info(
+        'Queued ANY.RUN job %s for alert %s.',
+        job_id,
+        values['alert_id'],
+    )
+    return _response(
+        202,
+        {
+            'job_id': job_id,
+            'message': 'ANY.RUN analysis was accepted for asynchronous processing.',
+        },
+    )
 
 
-def process_alert(
-    alert_id: str,
-    alert_source: str,
-    machine_os_platform: str,
-    analysis_options: dict[str, str | int | bool]
-) -> None:
-    """
-    Retrieves analysis object from the specific machine according to the received parameters
-
-    :param alert_id: XDR Alert ID
-    :param alert_source: Alert source: EDR ot Antivirus
-    :param machine_os_platform: Machine operating system
-    :param analysis_options: ANY.RUN Sandbox analysis options
-    """
-    ms_defender = MicrosoftDefender(log)
-    machine_id, evidences = ms_defender.get_evidences(alert_id, machine_os_platform)
-
-    log.info(f'Found evidences: {evidences}\n')
-
-    if alert_source == 'WindowsDefenderAtp':
-        for filepath in evidences.get('filepaths'):
-            log.info(f'Initialized evidence loading: {filepath}.')
-            if file := ms_defender.download_file_from_machine(machine_id, filepath):
-                log.info(f'Evidence is successfully downloaded: {filepath}')
-                setup_anyrun_connector('file', alert_id, machine_os_platform, analysis_options.copy(), ms_defender, file, os.path.basename(filepath))
-            else:
-                message = f'Requested file: {filepath} was not found on the machine.'
-                log.warning(message)
-                ms_defender.add_comment(alert_id, message)
-
-    elif alert_source == 'WindowsDefenderAv':
-        ms_defender.upload_ps_script_to_library(machine_os_platform)
-        ms_defender.execute_ps_script_on_machine(machine_id, machine_os_platform, evidences.get('filepaths'))
-
-        for filename in evidences.get('filenames'):
-            log.info(f'Initialized evidence loading: {filename}.')
-            if file := ms_defender.download_file_from_storage(filename):
-                setup_anyrun_connector('file', alert_id, machine_os_platform, analysis_options.copy(), ms_defender, file, filename)
-            else:
-                message = f'Requested file: {filename} was not found in the blob storage.'
-                log.warning(message)
-                ms_defender.add_comment(alert_id, message)
-
-    for url in evidences.get('urls'):
-        setup_anyrun_connector('url',  alert_id, machine_os_platform, analysis_options.copy(), ms_defender, url=url)
-
-
-def setup_anyrun_connector(
-    analysis_type: str,
-    alert_id: str,
-    machine_os_platform: str,
-    analysis_options: dict[str, str | int | bool],
-    ms_defender: MicrosoftDefender,
-    file: bytes | None = None,
-    filename: str | None = None,
-    url: str | None = None
-) -> None:
-    """
-    Initializes specific analysis environment according to the received parameters
-
-    :param analysis_type: File or URL analyse
-    :param alert_id: XDR Alert ID
-    :param machine_os_platform: Machine operating system
-    :param analysis_options: ANY.RUN Sandbox analysis options
-    :param ms_defender: The instance of the MSDefender utility class
-    :param file: File content
-    :param filename: File name
-    :param url: Url object
-    """
-    if machine_os_platform == 'windows':
-        log.info(f'Initialized ANY.RUN analysis using Windows VM')
-        with SandboxConnector.windows(
-            api_key=get_env_variable('ANYRUN_API_KEY'),
-            integration=Config.VERSION
-        ) as connector:
-            process_analysis(
-                analysis_type,
-                alert_id,
-                connector,
-                analysis_options,
-                ms_defender,
-                file,
-                filename,
-                url
-            )
-
-    elif machine_os_platform == 'linux':
-        log.info(f'Initialized ANY.RUN analysis using Linux VM')
-        with SandboxConnector.linux(
-            api_key=get_env_variable('ANYRUN_API_KEY'),
-            integration=Config.VERSION
-        ) as connector:
-            process_analysis(
-                analysis_type,
-                alert_id,
-                connector,
-                analysis_options,
-                ms_defender,
-                file,
-                filename,
-                url
-            )
-
-
-def process_analysis(
-    analysis_type: str,
-    alert_id: str,
-    connector: WindowsConnector | LinuxConnector,
-    analysis_options: dict[str, str | int | bool],
-    ms_defender: MicrosoftDefender,
-    file: bytes | None = None,
-    filename: str | None = None,
-    url: str | None = None
-) -> None:
-    """
-    Manages analysis results and updates the incident
-
-    :param analysis_type: File or URL analyse
-    :param alert_id: XDR Alert ID
-    :param connector: ANY.RUN connector instance
-    :param analysis_options: Analysis parameters
-    :param ms_defender: The instance of the MSDefender utility class
-    :param file: File content
-    :param filename: File name
-    :param url: Url object
-    """
-    log.info(f'Start analysis.')
-    if analysis_type == 'file':
-        analysis_options.pop('obj_ext_browser')
-        task_uuid = connector.run_file_analysis(file_content=file, filename=filename, **analysis_options)
-    else:
-        analysis_options = prepare_url_analysis_options(analysis_options)
-        task_uuid = connector.run_url_analysis(obj_url=url, **analysis_options)
-
-    log.info(f'Analysis type: {analysis_type}. Task uuid: {task_uuid}')
-
-    ms_defender.add_task_reference_comment(alert_id, filename or url, task_uuid=task_uuid)
-
-    log.info(f'Added reference comment.')
-
-    for status in connector.get_task_status(task_uuid):
-        log.info(str(status))
-
-    verdict = connector.get_analysis_verdict(task_uuid)
-    indicators = connector.get_analysis_report(task_uuid, report_format='ioc')
-    valid_indicators = clear_indicators(indicators)
-    report = connector.get_analysis_report(task_uuid)
-
-    if valid_indicators:
-        log.info(f'Loading indicators: {valid_indicators}.')
-        ms_defender.submit_indicators(valid_indicators, task_uuid)
-        ms_defender.add_ioc_comment(alert_id, valid_indicators)
-    else:
-        log.warning('Malicious/Suspicious indicators not found.')
-
-    ms_defender.add_summary_comment(alert_id, filename or url, verdict, report)
+def _response(status_code: int, body: dict[str, str]) -> func.HttpResponse:
+    return func.HttpResponse(
+        dumps(body),
+        status_code=status_code,
+        mimetype='application/json',
+    )

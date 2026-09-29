@@ -7,15 +7,20 @@
       "direction": "in",
       "name": "req",
       "methods": [
-        "get",
-        "post",
-        "patch"
+        "post"
       ]
     },
     {
       "type": "http",
       "direction": "out",
       "name": "$return"
+    },
+    {
+      "type": "queue",
+      "direction": "out",
+      "name": "job",
+      "queueName": "anyrun-mde-jobs",
+      "connection": "AzureWebJobsStorage"
     }
   ]
 }

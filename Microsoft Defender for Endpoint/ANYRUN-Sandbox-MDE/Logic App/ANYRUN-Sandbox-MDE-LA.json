@@ -30,6 +30,17 @@
             "metadata": {
                 "description": "Name of the Function App to call."
             }
+        },
+        "analysisPrivacyType": {
+            "type": "string",
+            "defaultValue": "owner",
+            "allowedValues": [
+                "owner",
+                "bylink"
+            ],
+            "metadata": {
+                "description": "ANY.RUN analysis visibility. The owner option requires a plan that supports private tasks."
+            }
         }
     },
     "variables": {
@@ -248,7 +259,7 @@
                                     {
                                         "name": "opt_privacy_type",
                                         "type": "string",
-                                        "value": "bylink"
+                                        "value": "[parameters('analysisPrivacyType')]"
                                     },
                                     {
                                         "name": "obj_ext_extension",

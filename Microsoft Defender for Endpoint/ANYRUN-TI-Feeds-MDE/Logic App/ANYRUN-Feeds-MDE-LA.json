@@ -20,7 +20,7 @@
                 "description": "Depth of the feed to fetch (in days)"
             }
         },
-        "minimumConfidenceThreshold": {
+        "minimum_confidence_threshold": {
             "defaultValue": 50,
             "type": "int",
             "minValue": 1,
@@ -45,7 +45,7 @@
             "type": "Microsoft.Logic/workflows",
             "apiVersion": "2017-07-01",
             "name": "[parameters('logicAppName')]",
-            "location": "eastus",
+            "location": "[resourceGroup().location]",
             "tags": {
                 "Resource": "Microsoft Defender XDR",
                 "PlaybookTrigger": "Incident",
@@ -71,7 +71,7 @@
                         }
                     },
                     "triggers": {
-                        "Recurrence": {
+        "Recurrence": {
                             "recurrence": {
                                 "interval": "[parameters('intervalRecurrence')]",
                                 "frequency": "Hour",
@@ -84,7 +84,12 @@
                                 "timeZone": "Eastern Standard Time",
                                 "startTime": "2025-12-08T16:30:00Z"
                             },
-                            "type": "Recurrence"
+          "type": "Recurrence",
+          "runtimeConfiguration": {
+            "concurrency": {
+              "runs": 1
+            }
+          }
                         }
                     },
                     "actions": {
@@ -101,7 +106,7 @@
                                     {
                                         "name": "minimum_confidence_threshold",
                                         "type": "integer",
-                                        "value": "[parameters('minimumConfidenceThreshold')]"
+                                        "value": "[parameters('minimum_confidence_threshold')]"
                                     }
                                 ]
                             }
@@ -118,9 +123,12 @@
                                     "feed_fetch_depth": "@variables('feed_fetch_depth')",
                                     "minimum_confidence_threshold": "@variables('minimum_confidence_threshold')"
                                 },
-                                "function": {
-                                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Feeds-MDE-FA')]"
-                                }
+            "function": {
+              "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Feeds-MDE-FA')]"
+            },
+            "retryPolicy": {
+              "type": "none"
+            }
                             }
                         }
                     },
