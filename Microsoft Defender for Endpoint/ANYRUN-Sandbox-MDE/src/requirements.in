@@ -1,0 +1,6 @@
+azure-functions==1.25.0
+requests==2.32.5
+azure-storage-file-share==12.26.0
+azure-storage-blob==12.30.0
+requests-toolbelt==1.0.0
+anyrun-sdk==1.14.19
