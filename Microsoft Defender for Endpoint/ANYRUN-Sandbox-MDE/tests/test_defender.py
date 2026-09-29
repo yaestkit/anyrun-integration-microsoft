@@ -415,6 +415,61 @@ class MicrosoftDefenderTests(unittest.TestCase):
         self.assertIn('exceeded 10 seconds', str(raised.exception))
         defender._cancel_machine_action.assert_called_once_with('own-action')
 
+    def test_new_live_response_resource_not_found_is_temporarily_not_visible(self):
+        defender = make_defender(self.module)
+        defender._make_request = Mock(return_value=FakeResponse(
+            404,
+            {'error': {'code': 'ResourceNotFound'}},
+            text='{"error":{"code":"ResourceNotFound"}}',
+        ))
+
+        result = defender._get_live_response_action_info('new-action')
+
+        self.assertIsNone(result)
+
+    def test_live_response_wait_retries_initial_resource_not_found(self):
+        defender = make_defender(self.module)
+        defender._get_live_response_action_info = Mock(side_effect=[
+            None,
+            None,
+            {'id': 'new-action', 'status': 'Succeeded'},
+        ])
+
+        with patch.object(self.module.time, 'monotonic', side_effect=[0, 0, 10]):
+            with patch.object(self.module.time, 'sleep') as sleep:
+                result = defender._wait_run_script_live_response_job('new-action')
+
+        self.assertEqual(result['status'], 'Succeeded')
+        self.assertEqual(defender._get_live_response_action_info.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_called_with(defender._config.LIVE_RESPONSE_VISIBILITY_POLL_SECONDS)
+
+    def test_live_response_wait_bounds_resource_visibility_retries(self):
+        defender = make_defender(self.module)
+        defender._get_live_response_action_info = Mock(return_value=None)
+
+        with patch.object(defender._config, 'LIVE_RESPONSE_VISIBILITY_WAIT_SECONDS', 20):
+            with patch.object(self.module.time, 'monotonic', side_effect=[0, 0, 20]):
+                with patch.object(self.module.time, 'sleep'):
+                    with self.assertRaises(RunTimeException) as raised:
+                        defender._wait_run_script_live_response_job('missing-action')
+
+        self.assertIn('did not become visible', str(raised.exception))
+        self.assertIn('Action ID: missing-action', str(raised.exception))
+
+    def test_other_live_response_404_is_not_retried(self):
+        defender = make_defender(self.module)
+        defender._make_request = Mock(return_value=FakeResponse(
+            404,
+            {'error': {'code': 'DifferentNotFound'}},
+            text='{"error":{"code":"DifferentNotFound"}}',
+        ))
+
+        with self.assertRaises(RunTimeException) as raised:
+            defender._get_live_response_action_info('action-id')
+
+        self.assertEqual(raised.exception.status_code, 404)
+
     def test_failed_download_is_not_returned_as_evidence(self):
         defender = make_defender(self.module)
         defender._make_request = Mock(return_value=FakeResponse(403, text='expired SAS'))

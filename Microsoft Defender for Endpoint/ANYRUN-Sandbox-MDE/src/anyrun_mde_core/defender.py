@@ -513,16 +513,25 @@ class MicrosoftDefender:
         if response.status_code >= 300:
             self._throw_error(f'Failed to cancel machine action: {action_id}', response)
 
-    def _get_live_response_action_info(self, live_response_id: str) -> dict:
+    def _get_live_response_action_info(self, live_response_id: str) -> dict | None:
         """
         Retrieves live response job info
 
         :param live_response_id: Live response job ID
-        :return: Live response job info
+        :return: Live response job info, or None while a newly created action
+            is not yet visible through the machineactions read endpoint
         """
         url = f'{self._config.DEFENDER_API_BASE_URL}/api/machineactions/{live_response_id}'
 
         response = self._make_request(method='GET', url=url)
+
+        if response.status_code == 404:
+            try:
+                error_code = (response.json().get('error') or {}).get('code')
+            except (AttributeError, TypeError, ValueError):
+                error_code = None
+            if error_code == 'ResourceNotFound':
+                return None
 
         if response.status_code >= 300:
             self._throw_error(f'Failed to retrieve live response action info.', response)
@@ -626,8 +635,33 @@ class MicrosoftDefender:
         :return: Live response job info
         """
         deadline = self._bounded_deadline(self._config.LIVE_RESPONSE_WAIT_SECONDS)
+        visibility_deadline = None
         while True:
             machine_action = self._get_live_response_action_info(live_response_id)
+            if machine_action is None:
+                now = time.monotonic()
+                if visibility_deadline is None:
+                    visibility_deadline = min(
+                        deadline,
+                        now + self._config.LIVE_RESPONSE_VISIBILITY_WAIT_SECONDS,
+                    )
+                if now >= visibility_deadline:
+                    self._throw_error(
+                        'Live Response action was created but did not become visible through '
+                        f'the machineactions API within '
+                        f'{self._config.LIVE_RESPONSE_VISIBILITY_WAIT_SECONDS} seconds. '
+                        f'Action ID: {live_response_id}.'
+                    )
+                self._log.warning(
+                    'Live Response action %s is not visible through machineactions yet; '
+                    'retrying in %s seconds.',
+                    live_response_id,
+                    self._config.LIVE_RESPONSE_VISIBILITY_POLL_SECONDS,
+                )
+                time.sleep(self._config.LIVE_RESPONSE_VISIBILITY_POLL_SECONDS)
+                continue
+
+            visibility_deadline = None
             status = machine_action.get('status')
 
             if status == 'Succeeded':

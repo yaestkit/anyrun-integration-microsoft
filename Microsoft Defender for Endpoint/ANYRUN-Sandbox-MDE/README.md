@@ -161,6 +161,11 @@ for up to 10 minutes. The connector limits its own wait to 15 minutes and does
 not cancel another product's session. Avoid running this connector and a
 Sentinel playbook against the same device pool.
 
+After Defender accepts a new Live Response action, its `machineactions` read
+endpoint can briefly return `404 ResourceNotFound`. The worker treats only that
+specific response as eventual consistency, retries every 10 seconds for up to
+3 minutes, and still fails immediately on other HTTP errors.
+
 The worker also has a 90-minute application deadline, leaving time to add a
 failure comment before the two-hour Azure Functions timeout. A missing EDR file
 does not stop the remaining files or URLs. The AV script succeeds when at least

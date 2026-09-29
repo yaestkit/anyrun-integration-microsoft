@@ -99,7 +99,7 @@ param(
   [string]$FeedsFunctionTemplateUri,
   [string]$FeedsLogicTemplateUri,
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxPackageSha256 = "0b0561ec9d0eb4e4632ab01a0716c576d05d07a6f93d7d7dcd3367acf0d8c48b",
+  [string]$SandboxPackageSha256 = "3e3af41d14400471f5d7841afdf3e166d6a74766f46ae5d6bbc4cf771103e029",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsPackageSha256 = "6f87fc5e7b5b6a51a645b3789c6b1c6756b5054c13e51374fd6b04bb6e9bcd41",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]

@@ -43,6 +43,11 @@ generation is disabled by default and can be enabled with
 must only be enabled for a dedicated Storage Account; the automated installer
 enables it only for an account it creates.
 
+Defender can briefly return `404 ResourceNotFound` when a newly accepted Live
+Response action has not reached the `machineactions` read endpoint yet. The
+worker retries only that response every 10 seconds for up to 3 minutes; other
+HTTP errors remain terminal.
+
 The Logic App parameter `analysisPrivacyType` defaults to `owner`, which
 requires an ANY.RUN plan supporting private tasks. Deploy with `bylink` when
 that mode is unavailable, after accepting that anyone with the task link can
