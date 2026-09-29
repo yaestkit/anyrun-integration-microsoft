@@ -285,6 +285,8 @@ class DeploymentScriptTests(unittest.TestCase):
     def test_legacy_role_cleanup_matches_name_and_principal(self):
         body = self.text.split("function Remove-LegacyStorageRoleAssignment", 1)[1]
         body = body.split("function New-PreparedFunctionTemplate", 1)[0]
+        self.assertIn("sites/$($FunctionAppName)?api-version=2024-11-01", body)
+        self.assertNotRegex(body, r"\$[A-Za-z_][A-Za-z0-9_]*\?")
         self.assertIn("$legacyNames -contains $_.RoleAssignmentName", body)
         self.assertIn("$_.ObjectId.ToString() -eq $principalId", body)
 

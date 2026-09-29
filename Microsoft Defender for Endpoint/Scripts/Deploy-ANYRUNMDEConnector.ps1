@@ -1286,7 +1286,7 @@ function Remove-LegacyStorageRoleAssignment {
 
   $storage = Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $StorageAccountName -ErrorAction SilentlyContinue
   if (-not $storage) { return }
-  $sitePath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$FunctionAppName?api-version=2024-11-01"
+  $sitePath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$($FunctionAppName)?api-version=2024-11-01"
   try {
     $site = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $sitePath)
   } catch { return }
