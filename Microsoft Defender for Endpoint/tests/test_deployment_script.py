@@ -130,7 +130,7 @@ class DeploymentScriptTests(unittest.TestCase):
 
     def test_reviewed_repository_ref_is_resolved_to_commit(self):
         self.assertIn('[string]$Repository = "yaestkit/anyrun-integration-microsoft"', self.text)
-        self.assertIn('[string]$RepositoryRef = "refs/heads/feat/mde-async-and-feed-hardening"', self.text)
+        self.assertIn('[string]$RepositoryRef = "refs/heads/asyncv2"', self.text)
         body = self.text.split("function Resolve-RepositoryCommit", 1)[1]
         body = body.split("function Get-VerifiedRemoteFile", 1)[0]
         self.assertIn("api.github.com/repos/$RepositoryName/commits/$encodedRef", body)
@@ -170,7 +170,7 @@ class DeploymentScriptTests(unittest.TestCase):
             self.assertIn("anyrun-sdk==1.14.19", locked)
 
     def test_checked_in_package_uris_are_not_commit_pinned(self):
-        expected = "raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening"
+        expected = "raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/asyncv2"
         for path in (SANDBOX_FUNCTION, FEEDS_FUNCTION):
             template = path.read_text(encoding="utf-8")
             self.assertIn(expected, template)

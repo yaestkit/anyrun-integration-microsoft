@@ -31,6 +31,23 @@ details and the asynchronous runtime model are documented in
 
 ## Solution Overview
 
+The connector uses a tracked asynchronous workflow:
+
+1. The Logic App starts `ANYRUN-Sandbox-MDE-FA`.
+2. The starter validates the request, creates a private job-status record, puts
+   the work on the `anyrun-mde-jobs` queue, and returns `202 Accepted` with a
+   `job_id` in a few seconds. A transient status-blob write is retried before
+   enqueue; a persistent failure returns `500` without creating queue work.
+3. `ANYRUN-Sandbox-MDE-Worker` performs Live Response, submits every available
+   file or URL to ANY.RUN, waits for the result, and enriches the Defender alert.
+4. While the worker runs, the Logic App polls the short-lived
+   `ANYRUN-Sandbox-MDE-Status` Function. Run history therefore shows separate
+   **Evidence submitted to ANY.RUN** and **ANY.RUN verdict received** actions.
+
+Long-running work never remains inside an HTTP request. This avoids the Logic
+App/Function HTTP timeout while still keeping the outcome visible in the same
+Logic App run.
+
 ## Prerequisites
 
 ### App Registration
@@ -122,7 +139,7 @@ details and the asynchronous runtime model are documented in
 
 - Click below to deploy Azure Function App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fasyncv2%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
 
 - Enter the parameters required for deploying the Function App and click **Review + create**.
 
@@ -143,18 +160,39 @@ details and the asynchronous runtime model are documented in
 | ANYRUN_API_KEY               | API Key of your ANY.RUN Account.                                            |
 | DefenderIndicatorAction      | `Audit` (default) or `Block` for malicious/suspicious indicators.           |
 | DefenderIndicatorGenerateAlert | Generate a Defender alert on IOC match; disabled by default.              |
-| ConfigureEvidenceLifecyclePolicy | Add one-day blob cleanup. Enable only for a dedicated Storage Account.  |
+| ConfigureEvidenceLifecyclePolicy | Delete evidence after one day and job status after seven days. Enable only for a dedicated Storage Account. |
 | LogAnalyticsWorkspaceName    | Log Analytics Workspace Name.                                               |
 
 ### Asynchronous execution
 
-The Logic App call only validates and queues the request. The HTTP Function
-returns `202 Accepted` immediately, and `ANYRUN-Sandbox-MDE-Worker` performs
-Live Response, waits for ANY.RUN, and enriches the alert. The Logic App action
-uses `DisableAsyncPattern` because this fire-and-forget response intentionally
-has no `Location` status endpoint. A successful Logic App run means “queued,”
-not “analysis completed.” Follow the `job_id` in Function/Application Insights
-logs and in failure comments added to the Defender alert.
+The starter HTTP Function returns `202 Accepted` immediately, and
+`ANYRUN-Sandbox-MDE-Worker` performs Live Response, waits for ANY.RUN, and
+enriches the alert. `DisableAsyncPattern` applies only to the short starter call;
+the Logic App then uses explicit status polling instead of keeping that HTTP
+request open.
+
+In **Logic App > Runs history**, open a run and expand these actions:
+
+- **Evidence submitted to ANY.RUN** — job ID, evidence name/type, file SHA-256,
+  ANY.RUN task UUID, and task URL;
+- **ANY.RUN verdict received** — terminal state plus all analyses, verdicts,
+  scores, task links, and IOC counts.
+
+The run stays in progress while the queue worker is active and succeeds only
+after the worker stores the final result. Worker failures terminate the Logic
+App run as failed and also add a best-effort failure comment to the Defender
+alert. Function/Application Insights remains the detailed diagnostic source.
+Job status is stored as JSON in the private `anyrun-job-status` blob container;
+API keys, credentials, file bytes, and SAS query strings are never written to
+that record.
+
+If Defender enrichment succeeds but the final job-status write fails, the
+worker deliberately does not poison the queue message: replay could create a
+second paid ANY.RUN task. The Logic App may consequently reach its polling
+limit and show `Failed` even though the analysis result is already present in
+Defender. In that degraded case, use the tracking-warning comment on the alert
+and the Function logs as the source of truth; do not automatically resubmit the
+Logic App run.
 
 Live Response permits only one active session per device. RunScript can execute
 for up to 10 minutes. The connector limits its own wait to 15 minutes and does
@@ -178,12 +216,12 @@ Defender rejects script parameters containing shell metacharacters such as
 The Antivirus collection path uses a random blob name and a 30-minute,
 create-only SAS scoped to that single blob.
 
-The Function template contains an optional one-day lifecycle rule as a final
-safety net for orphan evidence. Keep `ConfigureEvidenceLifecyclePolicy=false`
-for a shared or existing Storage Account: Azure stores one lifecycle-policy
-document per account, so replacing it could affect unrelated rules. The
-automated installer enables this policy only when it created a dedicated
-Sandbox Storage Account.
+The Function template contains optional lifecycle rules: orphan evidence is
+deleted after one day and job-status JSON after seven days. Keep
+`ConfigureEvidenceLifecyclePolicy=false` for a shared or existing Storage
+Account: Azure stores one lifecycle-policy document per account, so replacing
+it could affect unrelated rules. The automated installer enables these rules
+only when it created a dedicated Sandbox Storage Account.
 
 The `analysisPrivacyType` Logic App parameter defaults to `owner`. Private tasks
 require a compatible ANY.RUN plan; select `bylink` during deployment if the
@@ -194,7 +232,7 @@ who obtains its link and should be an explicit organizational decision.
 
 - Click below to deploy Azure Logic App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fasyncv2%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 

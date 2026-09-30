@@ -62,16 +62,20 @@ to move runtime secrets to Key Vault in a future connector revision.
    propagation/onedeploy failures, and verifies the deployed resources.
 7. Optionally starts a TI Feeds smoke test and reports its final run state.
 
-For Sandbox, the Logic App call is deliberately short-lived. The HTTP Function
-validates the request, writes a job to the `anyrun-mde-jobs` Storage Queue, and
-returns HTTP 202. A queue-triggered Function performs Live Response, waits for
-the ANY.RUN task, and enriches the Defender alert. This separates Logic App's
-HTTP timeout from the potentially long sandbox analysis.
+For Sandbox, the starter Function call is deliberately short-lived. It validates
+the request, creates a status record, writes a job to the `anyrun-mde-jobs`
+Storage Queue, and returns HTTP 202. A queue-triggered Function performs Live
+Response, waits for the ANY.RUN task, and enriches the Defender alert. The Logic
+App then polls a short status Function, so its run history exposes both
+**Evidence submitted to ANY.RUN** and **ANY.RUN verdict received** without
+holding one HTTP request open for the potentially long sandbox analysis.
 
-Failed jobs are moved to `anyrun-mde-jobs-poison` after the first failed attempt.
-Automatic retries are disabled intentionally because retrying after ANY.RUN has
-accepted a task can create a duplicate paid analysis. Inspect Function logs and
-the poison message before deciding whether to replay it.
+Safe progress and results are stored in the private `anyrun-job-status` blob
+container. Failed jobs are moved to `anyrun-mde-jobs-poison` after the first
+failed attempt. Automatic retries are disabled intentionally because retrying
+after ANY.RUN has accepted a task can create a duplicate paid analysis. Inspect
+the Logic App result, Function logs, and poison message before deciding whether
+to replay it.
 
 Example Application Insights query for worker failures:
 
@@ -96,12 +100,12 @@ traces
 `DefenderIndicatorGenerateAlert` defaults to `$false` to prevent an alert storm
 from Audit-mode indicators. `owner` requires an ANY.RUN plan with private-task
 support; choose `bylink` explicitly when that mode is unavailable. The installer
-adds the one-day orphan-evidence lifecycle policy only when it creates the
-dedicated Sandbox Storage Account. It does not replace the lifecycle policy of
-an existing account.
+adds the one-day orphan-evidence and seven-day job-status lifecycle rules only
+when it creates the dedicated Sandbox Storage Account. It does not replace the
+lifecycle policy of an existing account.
 
 The checked-in Function templates use the reviewed test repository and branch
-`yaestkit/anyrun-integration-microsoft@feat/mde-async-and-feed-hardening` for the
+`yaestkit/anyrun-integration-microsoft@asyncv2` for the
 **Deploy to Azure** path and are not tied to a commit. For installer runs, the
 requested repository ref is first resolved through GitHub to an immutable
 40-character commit. Only the temporary verified deployment copy has its
@@ -248,7 +252,7 @@ Defaults in this test bundle are:
 
 ```text
 Repository:    yaestkit/anyrun-integration-microsoft
-RepositoryRef: refs/heads/feat/mde-async-and-feed-hardening
+RepositoryRef: refs/heads/asyncv2
 ```
 
 The branch is resolved to a commit before downloading. Default SHA-256 values for

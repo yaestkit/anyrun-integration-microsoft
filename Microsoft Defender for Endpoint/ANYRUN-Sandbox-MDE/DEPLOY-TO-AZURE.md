@@ -5,7 +5,7 @@ permissions, artifacts, and both ARM templates. See
 [`../AUTOMATED-DEPLOYMENT.md`](../AUTOMATED-DEPLOYMENT.md).
 
 The direct buttons below track the reviewed test branch
-`yaestkit/anyrun-integration-microsoft@feat/mde-async-and-feed-hardening` and
+`yaestkit/anyrun-integration-microsoft@asyncv2` and
 therefore are not immutable releases. Use them only after reviewing the
 referenced commit. The installer resolves the branch to a commit and verifies
 SHA-256 values before deploy.
@@ -21,19 +21,30 @@ application permissions: `Alert.ReadWrite.All`, `Machine.LiveResponse`,
 `Library.Manage`. The automated installer grants this exact set after explicit
 administrator approval.
 
-## Asynchronous processing
+## Asynchronous processing and visible result
 
-The Logic App does not wait for Live Response or for the ANY.RUN analysis. The
-HTTP Function validates the invocation, puts it on the `anyrun-mde-jobs` queue,
-and returns HTTP 202. The `ANYRUN-Sandbox-MDE-Worker` queue-triggered Function
-then downloads evidence, submits it to ANY.RUN, waits for the verdict, and
-enriches the alert. Both functions are deployed in the same Function App and use
-its existing `AzureWebJobsStorage` setting, so no additional Azure resource or
-connection setting is required.
+The starter HTTP Function validates the invocation, creates a private status
+record, puts the work on the `anyrun-mde-jobs` queue, and returns HTTP 202. The
+`ANYRUN-Sandbox-MDE-Worker` queue-triggered Function then downloads evidence,
+submits it to ANY.RUN, waits for the verdict, and enriches the alert. The Logic
+App does not hold that HTTP request open. Instead, it polls the short
+`ANYRUN-Sandbox-MDE-Status` Function and keeps the workflow run active.
 
-An accepted Logic App run therefore means that the job was queued, not that the
-analysis finished. Use Function/Application Insights logs to follow the emitted
-`job_id`. A failed job is placed in `anyrun-mde-jobs-poison`; it is not retried
+In the Logic App run history, **Evidence submitted to ANY.RUN** displays the
+job ID, safe evidence metadata, SHA-256, task UUID, and task link. **ANY.RUN
+verdict received** displays the final state and an `analyses` array containing
+every result, verdict, score, link, and IOC count. A worker error terminates the
+Logic App as failed. Function/Application Insights remains the detailed source
+for Live Response and SDK diagnostics.
+
+All three Functions are deployed in the same Function App. The queue and the
+private `anyrun-job-status` blob container use the existing Storage Account, so
+no new service or connection is required. Job-status records contain no sample
+bytes, credentials, API keys, or SAS query strings. On installer-created
+dedicated Storage Accounts, lifecycle rules delete evidence after one day and
+status records after seven days.
+
+A failed job is placed in `anyrun-mde-jobs-poison`; it is not retried
 automatically to avoid accidentally submitting the same sample more than once.
 
 The worker stops new work after a 90-minute application budget so it can report
@@ -55,17 +66,17 @@ open the analysis.
 
 ## Function App
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fasyncv2%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
 
 ARM template:
-<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.json>
+<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.json>
 
 Function package:
-<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip>
+<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip>
 
 ## Logic App
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fasyncv2%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
 
 ARM template:
-<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Logic%20App/ANYRUN-Sandbox-MDE-LA.json>
+<https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Logic%20App/ANYRUN-Sandbox-MDE-LA.json>

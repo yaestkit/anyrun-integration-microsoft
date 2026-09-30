@@ -97,7 +97,7 @@ connector replaces indicators owned by its own client ID.
 
 - Click below to deploy Azure Function App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FFunction%2520App%2FANYRUN-Feeds-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fasyncv2%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FFunction%2520App%2FANYRUN-Feeds-MDE-FA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 
@@ -121,7 +121,7 @@ connector replaces indicators owned by its own client ID.
 
 - Click below to deploy Azure Logic App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Ffeat%2Fmde-async-and-feed-hardening%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FLogic%2520App%2FANYRUN-Feeds-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fyaestkit%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fasyncv2%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FLogic%2520App%2FANYRUN-Feeds-MDE-LA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 

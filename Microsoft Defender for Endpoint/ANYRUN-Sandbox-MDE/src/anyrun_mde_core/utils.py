@@ -1,8 +1,26 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlsplit, urlunsplit
+
+
+ABSOLUTE_URL_PATTERN = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
+BARE_QUERY_PATTERN = re.compile(
+    r'\?(?=[A-Za-z0-9_.~%-]+=)[^\s<>"\']+',
+    re.IGNORECASE,
+)
+SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r'(?i)(["\']?(?:accountkey|sharedaccesssignature|password|clientsecret|'
+    r'client_secret|api[_-]?key|access_token|refresh_token|sig|skoid|sktid)["\']?'
+    r'\s*[:=]\s*["\']?)[^"\'\s,;}]+'
+)
+AUTHORIZATION_PATTERN = re.compile(
+    r'(?i)\bauthorization\s*[:=]\s*(?:bearer\s+)?[^\s,;}\]]+'
+)
+BEARER_PATTERN = re.compile(r'(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+')
 
 
 def get_env_variable(name: str, default: str | None = None) -> str:
@@ -18,6 +36,29 @@ def get_env_variable(name: str, default: str | None = None) -> str:
             return default
         raise ValueError(f'Environment variable {name} is not set.')
     return variable
+
+
+def sanitize_error_text(value: object, limit: int = 500) -> str:
+    """Remove credentials and URL query data before externalizing an error."""
+    text = ' '.join(str(value).split())
+    text = ABSOLUTE_URL_PATTERN.sub(_redact_absolute_url, text)
+    # requests can report only a relative request target ("with url: /...?sig=").
+    text = BARE_QUERY_PATTERN.sub('?[REDACTED]', text)
+    text = SECRET_ASSIGNMENT_PATTERN.sub(r'\1[REDACTED]', text)
+    text = AUTHORIZATION_PATTERN.sub('authorization=[REDACTED]', text)
+    text = BEARER_PATTERN.sub('Bearer [REDACTED]', text)
+    return text[:limit] or 'unspecified error'
+
+
+def _redact_absolute_url(match: re.Match[str]) -> str:
+    raw_url = match.group(0)
+    suffix = ''
+    while raw_url and raw_url[-1] in '.,;)]}':
+        suffix = raw_url[-1] + suffix
+        raw_url = raw_url[:-1]
+    parsed = urlsplit(raw_url)
+    query = '[REDACTED]' if parsed.query else ''
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, '')) + suffix
 
 
 def prepare_url_analysis_options(analysis_options: dict) -> dict:

@@ -32,7 +32,7 @@ tasks, and duplicate indicators.
 
 The connector automatically sends MDE alerts’ suspicious files and URLs to ANY.RUN’s Interactive Sandbox for analysis and attaches the results (verdict, risk score, malware details) to the alert as comments. This helps SOC teams gain real-time insights into evasive threats, enabling faster triage, reduced false positives, and proactive response to minimize remediation time.
 
-[Open connector page](https://github.com/yaestkit/anyrun-integration-microsoft/tree/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE)
+[Open connector page](https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE)
 
 ## Threat Intelligence Feeds Connector
 
@@ -41,7 +41,7 @@ The connector automatically sends MDE alerts’ suspicious files and URLs to ANY
 
 The connector pulls fresh, high-fidelity threat indicators (IPs, domains, URLs, and file hashes), extracted from real-time detonations of the latest threats inside ANY.RUN’s Interactive Sandbox, and feeds them straight into MDE’s threat lists. Updated in real time with threat data from over 15,000 SOCs around the world, TI Feeds enable teams to spot new threats sooner, block them faster, and connect the dots between alerts for smarter investigations and quicker response. 
 
-[Open connector page](https://github.com/yaestkit/anyrun-integration-microsoft/tree/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE)
+[Open connector page](https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE)
 
 ### Request support or access to ANY.RUN’s products 
 

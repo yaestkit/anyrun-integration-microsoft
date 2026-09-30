@@ -5,7 +5,6 @@ import os
 import json
 import re
 import time
-import traceback
 from datetime import datetime, timedelta, timezone
 from itertools import islice
 from typing import Callable
@@ -23,7 +22,8 @@ from .utils import (
     generate_filepath,
     generate_ioc_comment,
     generate_task_uuid_comment,
-    generate_analysis_summary_comment
+    generate_analysis_summary_comment,
+    sanitize_error_text,
 )
 
 
@@ -116,9 +116,10 @@ class MicrosoftDefender:
                 permission=BlobSasPermissions(create=True),
                 expiry=expiry_time,
             )
-        except Exception:
+        except Exception as error:
             self._throw_error(
-                f'Failed to generate SAS token. Please, check your credentials. Reason: {traceback.format_exc()}.'
+                'Failed to generate SAS token. Please, check your credentials. '
+                f'Reason: {sanitize_error_text(error, limit=1000)}.'
             )
 
         return sas_token
@@ -303,8 +304,12 @@ class MicrosoftDefender:
 
         try:
             file_data = container_client.get_blob_client(filename).download_blob().readall()
-        except Exception:
-            self._log.error(traceback.format_exc())
+        except Exception as error:
+            self._log.error(
+                'Could not download evidence from Blob Storage: %s: %s',
+                type(error).__name__,
+                sanitize_error_text(error, limit=1000),
+            )
             return None
 
         try:
@@ -332,8 +337,12 @@ class MicrosoftDefender:
                         'Could not clean up evidence blob %s after a failed Live Response action.',
                         blob_name,
                     )
-        except Exception:
-            self._log.exception('Could not initialize Blob Storage cleanup after Live Response failure.')
+        except Exception as error:
+            self._log.error(
+                'Could not initialize Blob Storage cleanup after Live Response failure: %s: %s',
+                type(error).__name__,
+                sanitize_error_text(error, limit=1000),
+            )
 
     def download_file_from_machine(self, machine_id: str, filepath: str) -> bytes | None:
         """
@@ -674,10 +683,12 @@ class MicrosoftDefender:
             if time.monotonic() >= deadline:
                 try:
                     self._cancel_machine_action(live_response_id)
-                except Exception:
-                    self._log.exception(
-                        'Failed to cancel timed-out Live Response action %s.',
+                except Exception as error:
+                    self._log.error(
+                        'Failed to cancel timed-out Live Response action %s: %s: %s',
                         live_response_id,
+                        type(error).__name__,
+                        sanitize_error_text(error, limit=1000),
                     )
                 self._throw_error(
                     f'Live Response exceeded {self._config.LIVE_RESPONSE_WAIT_SECONDS} seconds. '
@@ -849,11 +860,13 @@ class MicrosoftDefender:
         :param error_message: Error text
         :param response: Response object
         """
-        self._log.error(error_message)
+        safe_message = sanitize_error_text(error_message, limit=1500)
+        self._log.error(safe_message)
 
         if response is not None:
+            safe_response = sanitize_error_text(response.text, limit=1000)
             raise RunTimeException(
-                f'{error_message} Response: {response.text}',
+                f'{safe_message} Response: {safe_response}',
                 response.status_code
             )
-        raise RunTimeException(error_message)
+        raise RunTimeException(safe_message)

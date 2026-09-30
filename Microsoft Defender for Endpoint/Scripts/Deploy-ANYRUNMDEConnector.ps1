@@ -93,21 +93,21 @@ param(
   [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
   [string]$Repository = "yaestkit/anyrun-integration-microsoft",
   [ValidatePattern('^[A-Za-z0-9._/-]+$')]
-  [string]$RepositoryRef = "refs/heads/feat/mde-async-and-feed-hardening",
+  [string]$RepositoryRef = "refs/heads/asyncv2",
   [string]$SandboxFunctionTemplateUri,
   [string]$SandboxLogicTemplateUri,
   [string]$FeedsFunctionTemplateUri,
   [string]$FeedsLogicTemplateUri,
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxPackageSha256 = "3e3af41d14400471f5d7841afdf3e166d6a74766f46ae5d6bbc4cf771103e029",
+  [string]$SandboxPackageSha256 = "cd6c8a916ef5dad7f2b2500a2729a9357e8cdda7f67831b7b827fd7a4b421593",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsPackageSha256 = "6f87fc5e7b5b6a51a645b3789c6b1c6756b5054c13e51374fd6b04bb6e9bcd41",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxFunctionTemplateSha256 = "d78b13d0e5bb284737b396929a526d1c1b321c908f1a1199de889b7d13fe5556",
+  [string]$SandboxFunctionTemplateSha256 = "7ec9b88be91c791a9c028252eed1eb85bfa9e9f864d17265f329f58479f721c7",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxLogicTemplateSha256 = "709d43529e2aa70882027b79486770199df72fffc53a5401f1ad59f65a718387",
+  [string]$SandboxLogicTemplateSha256 = "1e62844dc3353332bb4ff0716abed852ef7925975c25fc3ed30efae5a1e6f3b7",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsFunctionTemplateSha256 = "075a4e0dbc0f4185ee34b6751762ee343ebab23445e623bddde6db41374c4756",
+  [string]$FeedsFunctionTemplateSha256 = "e93cd0a4c97bd66481919af35b9fbc6f15859a300c2d743cd36a03bf812c53f4",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsLogicTemplateSha256 = "ddf86fc10ff613dc5df83e4d3dffc2d416fb3c78ae12c2ba18d337ea538a7d69",
   [string]$SandboxFunctionTemplateFile,

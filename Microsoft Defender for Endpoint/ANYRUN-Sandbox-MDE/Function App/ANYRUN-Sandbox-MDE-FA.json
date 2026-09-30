@@ -76,7 +76,7 @@
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Create a one-day evidence cleanup policy. Enable only for a dedicated Storage Account because Azure has one lifecycle policy document per account."
+        "description": "Create lifecycle cleanup rules: evidence after one day and asynchronous job status after seven days. Enable only for a dedicated Storage Account because Azure has one lifecycle policy document per account."
       }
     },
     "LogAnalyticsWorkspaceName": {
@@ -88,6 +88,7 @@
   },
   "variables": {
     "deploymentStorageContainerName": "anyrundeploymentcontainer",
+    "jobStatusContainerName": "anyrun-job-status",
     "storageRoleDefinitionId": "b7e6dc6d-f1e8-4753-8033-0f276bb0955b"
   },
   "resources": [
@@ -151,12 +152,24 @@
       ]
     },
     {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}/{1}/{2}', parameters('AzureStorageAccountName'), 'default', variables('jobStatusContainerName'))]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('AzureStorageAccountName'), 'default')]"
+      ]
+    },
+    {
       "type": "Microsoft.Storage/storageAccounts/managementPolicies",
       "apiVersion": "2023-05-01",
       "name": "[format('{0}/{1}', parameters('AzureStorageAccountName'), 'default')]",
       "condition": "[parameters('ConfigureEvidenceLifecyclePolicy')]",
       "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('AzureStorageAccountName'), 'default', parameters('AzureBlobContainerName'))]"
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('AzureStorageAccountName'), 'default', parameters('AzureBlobContainerName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('AzureStorageAccountName'), 'default', variables('jobStatusContainerName'))]"
       ],
       "properties": {
         "policy": {
@@ -179,6 +192,28 @@
                   ],
                   "prefixMatch": [
                     "[concat(parameters('AzureBlobContainerName'), '/')]"
+                  ]
+                }
+              }
+            },
+            {
+              "enabled": true,
+              "name": "delete-anyrun-job-status-after-seven-days",
+              "type": "Lifecycle",
+              "definition": {
+                "actions": {
+                  "baseBlob": {
+                    "delete": {
+                      "daysAfterModificationGreaterThan": 7
+                    }
+                  }
+                },
+                "filters": {
+                  "blobTypes": [
+                    "blockBlob"
+                  ],
+                  "prefixMatch": [
+                    "[concat(variables('jobStatusContainerName'), '/')]"
                   ]
                 }
               }
@@ -263,6 +298,10 @@
             {
               "name": "AzureBlobContainerName",
               "value": "[parameters('AzureBlobContainerName')]"
+            },
+            {
+              "name": "AnyRunJobStatusContainerName",
+              "value": "[variables('jobStatusContainerName')]"
             },
             {
               "name": "AzureClientID",
@@ -381,7 +420,7 @@
         "[resourceId('Microsoft.Resources/deployments', 'AssignFunctionStorageRole')]"
       ],
       "properties": {
-        "packageUri": "https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/feat/mde-async-and-feed-hardening/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip",
+        "packageUri": "https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip",
         "remoteBuild": true
       }
     },

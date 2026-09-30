@@ -43,8 +43,11 @@ class ArmTemplateTests(unittest.TestCase):
             'ANYRUN-Sandbox-MDE-FA/function.json',
             'ANYRUN-Sandbox-MDE-Worker/worker.py',
             'ANYRUN-Sandbox-MDE-Worker/function.json',
+            'ANYRUN-Sandbox-MDE-Status/status.py',
+            'ANYRUN-Sandbox-MDE-Status/function.json',
             'anyrun_mde_core/config.py',
             'anyrun_mde_core/defender.py',
+            'anyrun_mde_core/job_status.py',
             'anyrun_mde_core/processor.py',
             'anyrun_mde_core/ANYRUN-SB-DEFENDER.ps1',
             'anyrun_mde_core/ANYRUN-SB-DEFENDER.sh',
@@ -78,7 +81,7 @@ class ArmTemplateTests(unittest.TestCase):
         package_uri = extension['properties']['packageUri']
         self.assertTrue(package_uri.startswith('https://raw.githubusercontent.com/'))
         self.assertIn('/yaestkit/anyrun-integration-microsoft/', package_uri)
-        self.assertIn('/refs/heads/feat/mde-async-and-feed-hardening/', package_uri)
+        self.assertIn('/refs/heads/asyncv2/', package_uri)
         self.assertNotRegex(package_uri, r'/[0-9a-f]{40}/')
 
     def test_evidence_container_has_one_day_cleanup_policy(self):
@@ -90,6 +93,11 @@ class ArmTemplateTests(unittest.TestCase):
         self.assertFalse(
             self.template['parameters']['ConfigureEvidenceLifecyclePolicy']['defaultValue']
         )
+        lifecycle_description = self.template['parameters'][
+            'ConfigureEvidenceLifecyclePolicy'
+        ]['metadata']['description']
+        self.assertIn('one day', lifecycle_description)
+        self.assertIn('seven days', lifecycle_description)
         rule = policy['properties']['policy']['rules'][0]
         self.assertTrue(rule['enabled'])
         self.assertEqual(rule['type'], 'Lifecycle')
@@ -99,6 +107,40 @@ class ArmTemplateTests(unittest.TestCase):
         )
         self.assertEqual(rule['definition']['filters']['blobTypes'], ['blockBlob'])
         self.assertIn("AzureBlobContainerName", rule['definition']['filters']['prefixMatch'][0])
+
+        status_rule = policy['properties']['policy']['rules'][1]
+        self.assertEqual(status_rule['name'], 'delete-anyrun-job-status-after-seven-days')
+        self.assertEqual(
+            status_rule['definition']['actions']['baseBlob']['delete'][
+                'daysAfterModificationGreaterThan'
+            ],
+            7,
+        )
+        self.assertIn('jobStatusContainerName', status_rule['definition']['filters']['prefixMatch'][0])
+
+    def test_private_job_status_container_and_app_setting_are_deployed(self):
+        containers = [
+            resource for resource in self.template['resources']
+            if resource['type'] == 'Microsoft.Storage/storageAccounts/blobServices/containers'
+        ]
+        status_container = next(
+            resource for resource in containers
+            if "jobStatusContainerName" in resource['name']
+        )
+        self.assertEqual(status_container['properties']['publicAccess'], 'None')
+
+        site = next(
+            resource for resource in self.template['resources']
+            if resource['type'] == 'Microsoft.Web/sites'
+        )
+        settings = {
+            item['name']: item['value']
+            for item in site['properties']['siteConfig']['appSettings']
+        }
+        self.assertEqual(
+            settings['AnyRunJobStatusContainerName'],
+            "[variables('jobStatusContainerName')]",
+        )
 
     def test_endpoint_scripts_allow_partial_success_but_fail_if_nothing_uploaded(self):
         powershell = (SOURCE_DIR / 'anyrun_mde_core' / 'ANYRUN-SB-DEFENDER.ps1').read_text()

@@ -125,6 +125,23 @@ class MicrosoftDefenderTests(unittest.TestCase):
         self.assertFalse(request.kwargs['authenticated'])
         self.assertEqual(defender._headers['Authorization'], 'Bearer test-token')
 
+    def test_error_boundary_redacts_sas_connection_keys_and_bearer_tokens(self):
+        defender = make_defender(self.module)
+        message = (
+            'Network request failed for '
+            'https://account.blob.core.windows.net/c/file?sv=1&sig=sas-secret '
+            'AccountKey=storage-secret Bearer token-secret'
+        )
+
+        with self.assertRaises(RunTimeException) as raised:
+            defender._throw_error(message)
+
+        safe = str(raised.exception)
+        self.assertNotIn('sas-secret', safe)
+        self.assertNotIn('storage-secret', safe)
+        self.assertNotIn('token-secret', safe)
+        defender._log.error.assert_called_once()
+
     def test_oauth_request_does_not_reuse_defender_headers(self):
         defender = make_defender(self.module)
         defender._headers = {'Authorization': 'Bearer expired'}

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import logging
+import time
 from json import JSONDecodeError, dumps, loads
 from uuid import uuid4
 
 import azure.functions as func
+
+from anyrun_mde_core.job_status import JobStatusStore
+from anyrun_mde_core.utils import sanitize_error_text
 
 
 REQUIRED_FIELDS = (
@@ -15,6 +19,7 @@ REQUIRED_FIELDS = (
 )
 SUPPORTED_ALERT_SOURCES = {'WindowsDefenderAtp', 'WindowsDefenderAv'}
 SUPPORTED_PLATFORMS = {'windows', 'linux'}
+STATUS_CREATE_ATTEMPTS = 3
 
 
 def main(req: func.HttpRequest, job: func.Out[str]) -> func.HttpResponse:
@@ -58,6 +63,22 @@ def main(req: func.HttpRequest, job: func.Out[str]) -> func.HttpResponse:
 
     job_id = str(uuid4())
     message = {'job_id': job_id, **values}
+
+    try:
+        status_store = JobStatusStore.from_environment()
+        _create_status_with_retry(status_store, job_id, values['alert_id'])
+    except Exception as error:
+        logging.error(
+            'Failed to initialize ANY.RUN job status %s: %s: %s',
+            job_id,
+            type(error).__name__,
+            sanitize_error_text(error),
+        )
+        return _response(
+            500,
+            {'message': 'Failed to initialize asynchronous job tracking.'},
+        )
+
     job.set(dumps(message))
 
     logging.info(
@@ -69,9 +90,34 @@ def main(req: func.HttpRequest, job: func.Out[str]) -> func.HttpResponse:
         202,
         {
             'job_id': job_id,
+            'state': 'queued',
             'message': 'ANY.RUN analysis was accepted for asynchronous processing.',
         },
     )
+
+
+def _create_status_with_retry(
+    status_store: JobStatusStore,
+    job_id: str,
+    alert_id: str,
+) -> None:
+    """Retry the pre-enqueue status write without risking duplicate work."""
+    for attempt in range(1, STATUS_CREATE_ATTEMPTS + 1):
+        try:
+            status_store.create(job_id, alert_id)
+            return
+        except Exception as error:
+            if attempt == STATUS_CREATE_ATTEMPTS:
+                raise
+            logging.warning(
+                'Could not initialize ANY.RUN job status %s (%s/%s): %s: %s',
+                job_id,
+                attempt,
+                STATUS_CREATE_ATTEMPTS,
+                type(error).__name__,
+                sanitize_error_text(error),
+            )
+            time.sleep(2 ** (attempt - 1))
 
 
 def _response(status_code: int, body: dict[str, str]) -> func.HttpResponse:

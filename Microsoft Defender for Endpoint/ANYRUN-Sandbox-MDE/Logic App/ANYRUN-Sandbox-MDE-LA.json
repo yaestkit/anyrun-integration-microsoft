@@ -315,6 +315,30 @@
                                 ]
                             }
                         },
+                        "Initialize_ANYRUN_job_tracking": {
+                            "runAfter": {
+                                "ANY.RUN_Linux_analysis_options": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "anyrun_job_id",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "name": "anyrun_job_status",
+                                        "type": "object",
+                                        "value": {
+                                            "state": "not_started",
+                                            "stage": "not_started"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
                         "Check_if_the_alert_has_File_or_URL_entities": {
                             "actions": {
                                 "Check_if_the_alert_is_from_EDR_or_Antivirus": {
@@ -358,6 +382,18 @@
                                                         }
                                                     },
                                                     "operationOptions": "DisableAsyncPattern"
+                                                },
+                                                "Set_ANYRUN_job_id_for_Windows": {
+                                                    "runAfter": {
+                                                        "Execute_AnyRunDefender_using_Windows_VM": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "SetVariable",
+                                                    "inputs": {
+                                                        "name": "anyrun_job_id",
+                                                        "value": "@body('Execute_AnyRunDefender_using_Windows_VM')?['job_id']"
+                                                    }
                                                 }
                                             },
                                             "else": {
@@ -399,6 +435,18 @@
                                                                     }
                                                                 },
                                                                 "operationOptions": "DisableAsyncPattern"
+                                                            },
+                                                            "Set_ANYRUN_job_id_for_Linux": {
+                                                                "runAfter": {
+                                                                    "Execute_AnyRunDefender_using_Linux_VM": [
+                                                                        "Succeeded"
+                                                                    ]
+                                                                },
+                                                                "type": "SetVariable",
+                                                                "inputs": {
+                                                                    "name": "anyrun_job_id",
+                                                                    "value": "@body('Execute_AnyRunDefender_using_Linux_VM')?['job_id']"
+                                                                }
                                                             }
                                                         },
                                                         "else": {
@@ -475,7 +523,7 @@
                                 }
                             },
                             "runAfter": {
-                                "ANY.RUN_Linux_analysis_options": [
+                                "Initialize_ANYRUN_job_tracking": [
                                     "Succeeded"
                                 ]
                             },
@@ -500,6 +548,220 @@
                                 ]
                             },
                             "type": "If"
+                        },
+                        "Wait_until_evidence_is_submitted_to_ANYRUN": {
+                            "actions": {
+                                "Delay_before_submission_status_check": {
+                                    "type": "Wait",
+                                    "inputs": {
+                                        "interval": {
+                                            "count": 15,
+                                            "unit": "Second"
+                                        }
+                                    }
+                                },
+                                "Get_ANYRUN_submission_status": {
+                                    "runAfter": {
+                                        "Delay_before_submission_status_check": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Function",
+                                    "inputs": {
+                                        "body": {
+                                            "job_id": "@variables('anyrun_job_id')"
+                                        },
+                                        "function": {
+                                            "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Sandbox-MDE-Status')]"
+                                        },
+                                        "retryPolicy": {
+                                            "type": "fixed",
+                                            "count": 3,
+                                            "interval": "PT5S"
+                                        }
+                                    }
+                                },
+                                "Set_ANYRUN_submission_status": {
+                                    "runAfter": {
+                                        "Get_ANYRUN_submission_status": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "anyrun_job_status",
+                                        "value": "@body('Get_ANYRUN_submission_status')"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Check_if_the_alert_has_File_or_URL_entities": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": "@or(equals(variables('anyrun_job_status')?['state'], 'submitted_to_anyrun'), equals(variables('anyrun_job_status')?['state'], 'waiting_for_verdict'), equals(variables('anyrun_job_status')?['state'], 'analysis_completed'), equals(variables('anyrun_job_status')?['state'], 'completed'), equals(variables('anyrun_job_status')?['state'], 'failed'))",
+                            "limit": {
+                                "count": 240,
+                                "timeout": "PT1H"
+                            },
+                            "operationOptions": "FailWhenLimitsReached",
+                            "type": "Until"
+                        },
+                        "Fail_if_ANYRUN_job_failed_before_submission": {
+                            "actions": {
+                                "Terminate_failed_ANYRUN_submission": {
+                                    "type": "Terminate",
+                                    "inputs": {
+                                        "runStatus": "Failed",
+                                        "runError": {
+                                            "code": "ANYRUNSubmissionFailed",
+                                            "message": "@coalesce(variables('anyrun_job_status')?['error'], 'ANY.RUN job failed before evidence submission.')"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Wait_until_evidence_is_submitted_to_ANYRUN": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {}
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@variables('anyrun_job_status')?['state']",
+                                            "failed"
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Evidence_submitted_to_ANYRUN": {
+                            "runAfter": {
+                                "Fail_if_ANYRUN_job_failed_before_submission": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Compose",
+                            "inputs": {
+                                "job_id": "@variables('anyrun_job_id')",
+                                "state": "@variables('anyrun_job_status')?['state']",
+                                "evidence_type": "@variables('anyrun_job_status')?['latest_analysis']?['analysis_type']",
+                                "evidence": "@variables('anyrun_job_status')?['latest_analysis']?['evidence']",
+                                "sha256": "@variables('anyrun_job_status')?['latest_analysis']?['sha256']",
+                                "task_uuid": "@variables('anyrun_job_status')?['latest_analysis']?['task_uuid']",
+                                "task_url": "@variables('anyrun_job_status')?['latest_analysis']?['task_url']"
+                            }
+                        },
+                        "Wait_until_ANYRUN_verdict_is_available": {
+                            "actions": {
+                                "Delay_before_verdict_status_check": {
+                                    "type": "Wait",
+                                    "inputs": {
+                                        "interval": {
+                                            "count": 30,
+                                            "unit": "Second"
+                                        }
+                                    }
+                                },
+                                "Get_ANYRUN_verdict_status": {
+                                    "runAfter": {
+                                        "Delay_before_verdict_status_check": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Function",
+                                    "inputs": {
+                                        "body": {
+                                            "job_id": "@variables('anyrun_job_id')"
+                                        },
+                                        "function": {
+                                            "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Sandbox-MDE-Status')]"
+                                        },
+                                        "retryPolicy": {
+                                            "type": "fixed",
+                                            "count": 3,
+                                            "interval": "PT5S"
+                                        }
+                                    }
+                                },
+                                "Set_ANYRUN_verdict_status": {
+                                    "runAfter": {
+                                        "Get_ANYRUN_verdict_status": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "anyrun_job_status",
+                                        "value": "@body('Get_ANYRUN_verdict_status')"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Evidence_submitted_to_ANYRUN": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": "@or(equals(variables('anyrun_job_status')?['state'], 'completed'), equals(variables('anyrun_job_status')?['state'], 'failed'))",
+                            "limit": {
+                                "count": 240,
+                                "timeout": "PT2H"
+                            },
+                            "operationOptions": "FailWhenLimitsReached",
+                            "type": "Until"
+                        },
+                        "Fail_if_ANYRUN_analysis_failed": {
+                            "actions": {
+                                "Terminate_failed_ANYRUN_analysis": {
+                                    "type": "Terminate",
+                                    "inputs": {
+                                        "runStatus": "Failed",
+                                        "runError": {
+                                            "code": "ANYRUNAnalysisFailed",
+                                            "message": "@coalesce(variables('anyrun_job_status')?['error'], 'ANY.RUN analysis failed.')"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Wait_until_ANYRUN_verdict_is_available": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {}
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@variables('anyrun_job_status')?['state']",
+                                            "failed"
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "ANYRUN_verdict_received": {
+                            "runAfter": {
+                                "Fail_if_ANYRUN_analysis_failed": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Compose",
+                            "inputs": {
+                                "job_id": "@variables('anyrun_job_id')",
+                                "state": "@variables('anyrun_job_status')?['state']",
+                                "analysis_count": "@variables('anyrun_job_status')?['analysis_count']",
+                                "analyses": "@variables('anyrun_job_status')?['analyses']",
+                                "completed_at": "@variables('anyrun_job_status')?['completed_at']"
+                            }
                         },
                         "Select_Entity_Types": {
                             "runAfter": {
