@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 import hashlib
 import logging as log
@@ -61,7 +60,7 @@ def process_alert(
 
     if alert_source == 'WindowsDefenderAtp':
         for filepath in filepaths:
-            evidence_name = os.path.basename(filepath)
+            evidence_name = _file_basename(filepath)
             _emit_status(
                 status_callback,
                 'collecting_evidence',
@@ -113,7 +112,7 @@ def process_alert(
         )
 
         for filename, blob_name in blob_targets:
-            evidence_name = os.path.basename(filename)
+            evidence_name = _file_basename(filename)
             _emit_status(
                 status_callback,
                 'collecting_evidence',
@@ -291,7 +290,8 @@ def process_analysis(
     _check_deadline(deadline_monotonic)
     verdict = connector.get_analysis_verdict(task_uuid)
     indicators = connector.get_analysis_report(task_uuid, report_format='ioc')
-    valid_indicators = clear_indicators(indicators)
+    valid_indicators = clear_indicators(indicators) or []
+    rejected_indicators: list[dict] = []
     report = connector.get_analysis_report(task_uuid)
     score = _report_value(report, 'data', 'analysis', 'scores', 'verdict', 'score')
     task_url = _report_value(report, 'data', 'analysis', 'permanentUrl')
@@ -323,7 +323,7 @@ def process_analysis(
         'verdict': str(verdict),
         'threat_score': score,
         'indicators_count': len(valid_indicators),
-        'rejected_indicators_count': len(rejected_indicators) if valid_indicators else 0,
+        'rejected_indicators_count': len(rejected_indicators),
     }
     _emit_status(
         status_callback,
@@ -357,9 +357,14 @@ def _display_evidence(
     url: str | None,
 ) -> str:
     if analysis_type == 'file':
-        return os.path.basename(filename or 'unnamed-file')[:260]
+        return _file_basename(filename or 'unnamed-file')[:260]
     parsed = urlsplit(url or '')
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', ''))[:500]
+
+
+def _file_basename(filename: str) -> str:
+    """Return only the final component for Windows or POSIX paths."""
+    return str(filename).replace('\\', '/').rsplit('/', 1)[-1]
 
 
 def _report_value(report: dict, *path: str):

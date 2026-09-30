@@ -169,11 +169,15 @@ def convert_reputation(reputation: int) -> str:
     return {0: 'No info', 1: 'Suspicious', 2: 'Malicious'}.get(reputation)
 
 
-def clear_indicators(indicators: list[dict]) -> list[dict] | None:
+def clear_indicators(indicators: list[dict] | None) -> list[dict]:
     """
     Removes indicators with zero reputation
 
     :param indicators: ANY.RUN indicators
     :return: ANY.RUN indicators
     """
-    return [indicator for indicator in indicators if indicator.get('reputation') in (1, 2)] if indicators else None
+    return [
+        indicator
+        for indicator in (indicators or [])
+        if indicator.get('reputation') in (1, 2)
+    ]

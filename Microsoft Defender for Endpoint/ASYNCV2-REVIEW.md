@@ -335,10 +335,10 @@ store. Поэтому там нет полного URL с query parameters, те
 
 В финальной сборке выполнено:
 
-- Sandbox: 58 тестов;
+- Sandbox: 60 тестов;
 - TI Feeds: 25 тестов;
 - installer и общие deployment contracts: 29 тестов;
-- всего: 112 успешно пройденных тестов;
+- всего: 114 успешно пройденных тестов;
 - JSON-проверка ARM, Logic App, Function bindings и `host.json`;
 - Python syntax compilation исходников Sandbox и TI Feeds;
 - детерминированная пересборка обоих Function ZIP;
@@ -361,6 +361,8 @@ end-to-end запуск должны быть выполнены после пу
 | Blob SDK retries могли умножаться на повторы worker | Исправлено | Status client использует zero SDK retries, connect/read timeout 3/5 секунд и общие application budgets 10/30 секунд. |
 | Отключение SDK retries оставило starter без защиты от transient Storage error | Исправлено | Starter повторяет одну и ту же idempotent pre-enqueue запись до трёх раз; queue message создаётся только после успеха. |
 | Bare `sig=` мог пройти вне URL query | Исправлено | `sig`, `skoid` и `sktid` маскируются как standalone assignments; `sp/st/se` намеренно остаются query-only. |
+| Анализ без Suspicious/Malicious IOC падал на `len(None)` | Исправлено | Фильтр IOC всегда возвращает список; пустой результат сохраняется как нулевые счётчики и не превращает успешно полученный verdict в ошибку worker. |
+| Windows filepath попадал в status целиком | Исправлено | Basename извлекается независимо от ОС worker и разделителей `\\`/`/`; status и Runs history больше не раскрывают каталоги и имя пользователя хоста. |
 | При потере `completed` Logic App может показать `Failed` после успешного анализа | Документировано | Worker намеренно не создаёт poison message и оставляет tracking-warning в Defender; раздел 6 описывает расхождение и запрещает автоматический replay. |
 | `permanentUrl` мог содержать query | Исправлено | Task URL дополнительно нормализуется перед записью в status. |
 | Нет тестов негативных status paths | Исправлено | Добавлены starter 500/no enqueue, empty analyses, Status 400/404/500, initial/intermediate/final Blob failures и redaction. |

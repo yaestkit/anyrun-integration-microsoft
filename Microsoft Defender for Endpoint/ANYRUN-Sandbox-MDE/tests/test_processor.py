@@ -37,7 +37,7 @@ def load_processor(defender_client):
     utils = types.ModuleType(f'{package.__name__}.utils')
     utils.get_env_variable = Mock()
     utils.prepare_url_analysis_options = Mock(side_effect=lambda options: options)
-    utils.clear_indicators = Mock(side_effect=lambda indicators: indicators)
+    utils.clear_indicators = Mock(side_effect=lambda indicators: indicators or [])
     utils.sanitize_error_text = Mock(return_value='sanitized collection error')
     config = types.ModuleType(f'{package.__name__}.config')
     config.Config = type('Config', (), {'VERSION': 'test'})
@@ -154,6 +154,45 @@ class ProcessorTests(unittest.TestCase):
         states = [call.args[0] for call in status_callback.call_args_list]
         self.assertIn('submitted_to_anyrun', states)
         self.assertEqual(states[-1], 'analysis_completed')
+
+    def test_analysis_without_actionable_iocs_completes_with_zero_counts(self):
+        defender_client = Mock()
+        connector = Mock()
+        connector.run_file_analysis.return_value = 'task-without-iocs'
+        connector.get_task_status.return_value = ['done']
+        connector.get_analysis_verdict.return_value = 'no threats detected'
+        connector.get_analysis_report.side_effect = [
+            None,
+            {
+                'data': {
+                    'analysis': {
+                        'scores': {'verdict': {'score': 0}},
+                        'permanentUrl': 'https://app.any.run/tasks/task-without-iocs',
+                    }
+                }
+            },
+        ]
+        status_callback = Mock()
+        module = load_processor(defender_client)
+
+        result = module.process_analysis(
+            analysis_type='file',
+            alert_id='alert-no-iocs',
+            connector=connector,
+            analysis_options={'opt_timeout': 240},
+            ms_defender=defender_client,
+            file=b'sample',
+            filename=r'C:\Users\analyst\Downloads\sample.zip',
+            status_callback=status_callback,
+        )
+
+        self.assertEqual(result['evidence'], 'sample.zip')
+        self.assertEqual(result['indicators_count'], 0)
+        self.assertEqual(result['rejected_indicators_count'], 0)
+        defender_client.submit_indicators.assert_not_called()
+        defender_client.add_ioc_comment.assert_not_called()
+        defender_client.add_summary_comment.assert_called_once()
+        self.assertEqual(status_callback.call_args.args[0], 'analysis_completed')
 
 
 if __name__ == '__main__':

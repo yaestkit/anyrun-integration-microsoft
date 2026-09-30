@@ -68,6 +68,13 @@ class ErrorSanitizerTests(unittest.TestCase):
             self.assertNotIn(secret, text)
         self.assertIn('skoid=[REDACTED]', text)
 
+    def test_clear_indicators_returns_an_empty_list_when_report_has_no_iocs(self):
+        self.assertEqual(self.module.clear_indicators(None), [])
+        self.assertEqual(
+            self.module.clear_indicators([{'reputation': 0, 'ioc': 'safe.test'}]),
+            [],
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
