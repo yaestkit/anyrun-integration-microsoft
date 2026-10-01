@@ -3,6 +3,9 @@ import json
 import sys
 import types
 import unittest
+import asyncio
+from datetime import datetime, timedelta, timezone
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import ANY, Mock, patch
 
@@ -50,6 +53,10 @@ class FakeQueueMessage:
         return self._body
 
 
+class RecoveryRequired(RuntimeError):
+    pass
+
+
 def install_azure_functions_stub():
     azure = types.ModuleType('azure')
     functions = types.ModuleType('azure.functions')
@@ -71,9 +78,145 @@ def load_module(name, path):
 
 
 class AsyncContractTests(unittest.TestCase):
+    def payload(self):
+        return {'job_id': 'job-recovery', 'alert_id': 'alert', 'alert_source': 'WindowsDefenderAtp',
+                'machine_os_platform': 'windows', 'analysis_options': {'opt_timeout': 240}}
+
+    def test_stale_projection_is_read_only_and_keeps_fresh_and_terminal_jobs(self):
+        module = load_module('stale_status_under_test', STATUS_DIR / 'status.py')
+        now = datetime.now(timezone.utc)
+        status = {'state': 'waiting_for_verdict', 'updated_at': (now - timedelta(minutes=16)).isoformat(),
+                  'latest_analysis': {'task_uuid': 'paid-task'}}
+        stale = module._mark_stale(status, now)
+        self.assertEqual(stale['stage'], 'stale')
+        self.assertEqual(stale['error_type'], 'StaleJob')
+        self.assertEqual(status['state'], 'waiting_for_verdict')
+        self.assertEqual(stale['latest_analysis']['task_uuid'], 'paid-task')
+        fresh = {**status, 'updated_at': (now - timedelta(minutes=11)).isoformat()}
+        self.assertEqual(module._mark_stale(fresh, now), fresh)  # Survives Azure's 10-minute crash lock.
+        completed = {**status, 'state': 'completed'}
+        self.assertEqual(module._mark_stale(completed, now), completed)
+
+    def test_base_exception_remains_recoverable_until_final_attempt(self):
+        process = Mock(side_effect=asyncio.CancelledError())
+        module, defender = self._load_worker_for_test('interrupted_worker', process)
+        with self.assertRaises(asyncio.CancelledError):
+            module.main(FakeQueueMessage(self.payload(), dequeue_count=1))
+        self.assertEqual(self.status_store.update.call_args.kwargs['state'], 'retrying')
+        self.assertEqual(self.status_store.update.call_args.kwargs['stage'], 'interrupted')
+        defender.add_comment.assert_not_called()
+        with self.assertRaises(asyncio.CancelledError):
+            module.main(FakeQueueMessage(self.payload(), dequeue_count=3))
+        self.assertEqual(self.status_store.update.call_args.kwargs['state'], 'failed')
+
+    def test_transient_failure_is_retrying_and_same_state_is_passed_on_resume(self):
+        process = Mock(side_effect=RuntimeError('temporary API failure'))
+        module, defender = self._load_worker_for_test('retry_worker', process)
+        state = {'state': 'waiting_for_verdict', 'analyses': [{'task_uuid': 'paid-task'}]}
+        self.status_store.get.return_value = state
+        with self.assertRaisesRegex(RuntimeError, 'temporary API'):
+            module.main(FakeQueueMessage(self.payload(), dequeue_count=2))
+        self.assertEqual(process.call_args.kwargs['resume_state'], state)
+        self.assertEqual(self.status_store.update.call_args.kwargs['state'], 'retrying')
+        self.assertEqual(self.status_store.update.call_args_list[0].kwargs['stage'], 'resumed')
+        defender.add_comment.assert_not_called()
+
+    def test_completed_queue_redelivery_does_not_start_business_work(self):
+        process = Mock()
+        module, _ = self._load_worker_for_test('completed_redelivery_worker', process)
+        self.status_store.get.return_value = {'state': 'completed'}
+        module.main(FakeQueueMessage(self.payload(), dequeue_count=2))
+        process.assert_not_called()
+
+    def test_fully_enriched_checkpoints_restore_completed_without_sandbox_calls(self):
+        process = Mock()
+        module, _ = self._load_worker_for_test('tracking_only_worker', process)
+        self.status_store.get.return_value = {
+            'state': 'analysis_completed', 'evidence_count': 1,
+            'analyses': [{'task_uuid': 'paid-task', 'enriched': True}],
+        }
+        module.main(FakeQueueMessage(self.payload(), dequeue_count=2))
+        process.assert_not_called()
+        module.get_env_variable.assert_not_called()
+        self.assertEqual(self.status_store.update.call_args.kwargs['state'], 'completed')
+
+    def test_durable_checkpoint_failure_aborts_before_paid_submission(self):
+        submitted = Mock()
+
+        def process(**kwargs):
+            kwargs['checkpoint_callback']('submitting_to_anyrun', {'evidence_key': 'key', 'submission_intent': True})
+            submitted()
+
+        module, _ = self._load_worker_for_test('checkpoint_failure_worker', process)
+        module.time.sleep = Mock()
+        self.status_store.update.side_effect = RuntimeError('Storage down')
+        with self.assertRaisesRegex(RuntimeError, 'Durable analysis checkpoint'):
+            module.main(FakeQueueMessage(self.payload()))
+        submitted.assert_not_called()
+
+    def test_heartbeat_failure_does_not_stop_lease_renewal_or_business(self):
+        module, _ = self._load_worker_for_test('heartbeat_worker', Mock())
+        stop, lease, lost = Mock(), Mock(), Mock()
+        stop.wait.side_effect = [False, False, True]
+        self.status_store.touch.side_effect = RuntimeError('temporary heartbeat failure')
+        with patch.object(module.time, 'monotonic', side_effect=[0, 20, 20, 60, 60, 40, 40, 120, 120]):
+            module._keep_alive(self.status_store, 'job', lease, stop, lost)
+        self.assertEqual(lease.renew.call_count, 2)
+        self.assertEqual(self.status_store.touch.call_count, 2)
+        lost.set.assert_not_called()
+
+    def test_lost_lease_stops_heartbeats(self):
+        module, _ = self._load_worker_for_test('lease_lost_worker', Mock())
+        stop, lease, lost = Mock(), Mock(), Mock()
+        stop.wait.return_value = False
+        lease.renew.side_effect = RuntimeError('lease expired')
+        lease.renew.side_effect.error_code = 'LeaseLost'
+        module._keep_alive(self.status_store, 'job', lease, stop, lost)
+        lost.set.assert_called_once()
+        self.status_store.touch.assert_not_called()
+
+    def test_transient_lease_renewal_failure_recovers_within_lease_lifetime(self):
+        module, _ = self._load_worker_for_test('temporary_lease_failure_worker', Mock())
+        stop, lease, lost = Mock(), Mock(), Mock()
+        stop.wait.side_effect = [False, False, True]
+        lease.renew.side_effect = [RuntimeError('Storage temporarily unavailable'), None]
+        with patch.object(module.time, 'monotonic', side_effect=[0, 20, 20, 40, 40, 40]):
+            module._keep_alive(self.status_store, 'job', lease, stop, lost)
+        self.assertEqual(lease.renew.call_count, 2)
+        lost.set.assert_not_called()
+
+    def test_lease_expiry_deadline_stops_worker_without_reacquiring(self):
+        module, _ = self._load_worker_for_test('lease_deadline_worker', Mock())
+        stop, lease, lost = Mock(), Mock(), Mock()
+        stop.wait.side_effect = [False, False, False]
+        lease.renew.side_effect = RuntimeError('temporary network failure')
+        with patch.object(module.time, 'monotonic', side_effect=[0, 20, 20, 40, 40, 60]):
+            module._keep_alive(self.status_store, 'job', lease, stop, lost)
+        self.assertEqual(lease.renew.call_count, 2)
+        lost.set.assert_called_once()
+
+    def test_lease_contention_does_not_acknowledge_or_mutate_the_job(self):
+        module, _ = self._load_worker_for_test('lease_contention_worker', Mock())
+        self.status_store.claim.side_effect = RuntimeError('LeaseAlreadyPresent')
+        with self.assertRaisesRegex(RuntimeError, 'LeaseAlreadyPresent'):
+            module.main(FakeQueueMessage(self.payload()))
+        self.status_store.update.assert_not_called()
+
+    def test_permanent_submission_rejection_is_terminal_on_first_attempt(self):
+        from anyrun_mde_core.api_errors import SubmissionRejected
+        module, defender = self._load_worker_for_test('rejected_submission_worker', Mock(side_effect=SubmissionRejected('HTTP 400')))
+        with self.assertRaises(SubmissionRejected):
+            module.main(FakeQueueMessage(self.payload()))
+        self.assertEqual(self.status_store.update.call_args.kwargs['state'], 'failed')
+        defender.add_comment.assert_called_once()
+
     def setUp(self):
         install_azure_functions_stub()
+        load_module('anyrun_mde_core.api_errors', SOURCE_DIR / 'anyrun_mde_core' / 'api_errors.py')
         self.status_store = Mock()
+        self.status_store.get.return_value = {'state': 'queued', 'analyses': []}
+        self.status_store.claim.side_effect = lambda _job_id: nullcontext(Mock())
+        config = load_module('anyrun_mde_core.config', SOURCE_DIR / 'anyrun_mde_core' / 'config.py')
         job_status = types.ModuleType('anyrun_mde_core.job_status')
         job_status.JobStatusStore = Mock()
         job_status.JobStatusStore.from_environment.return_value = self.status_store
@@ -103,14 +246,19 @@ class AsyncContractTests(unittest.TestCase):
         sandbox = types.ModuleType('anyrun.connectors.sandbox')
         base = types.ModuleType('anyrun.connectors.sandbox.base_connector')
         base.BaseSandboxConnector = FakeConnector
+        bounded = types.ModuleType('anyrun_mde_core.sandbox_client')
+        bounded.BoundedBaseConnector = FakeConnector
+        sys.modules[bounded.__name__] = bounded
         core = types.ModuleType('anyrun_mde_core')
         config = types.ModuleType('anyrun_mde_core.config')
         config.Config = type('Config', (), {
             'VERSION': 'test',
             'JOB_TIME_BUDGET_SECONDS': 5400,
+            'HEARTBEAT_SECONDS': 60, 'QUEUE_MAX_DEQUEUE_COUNT': 3,
         })
         processor = types.ModuleType('anyrun_mde_core.processor')
         processor.process_alert = process_alert
+        processor.RecoveryRequired = RecoveryRequired
         defender = types.ModuleType('anyrun_mde_core.defender')
         defender.MicrosoftDefender = Mock(return_value=defender_client)
         job_status = types.ModuleType('anyrun_mde_core.job_status')
@@ -240,7 +388,7 @@ class AsyncContractTests(unittest.TestCase):
         class FakeConnector:
             checked = False
 
-            def __init__(self, api_key, integration):
+            def __init__(self, api_key, integration, **_kwargs):
                 self.api_key = api_key
                 self.integration = integration
 
@@ -258,6 +406,9 @@ class AsyncContractTests(unittest.TestCase):
         sandbox = types.ModuleType('anyrun.connectors.sandbox')
         base = types.ModuleType('anyrun.connectors.sandbox.base_connector')
         base.BaseSandboxConnector = FakeConnector
+        bounded = types.ModuleType('anyrun_mde_core.sandbox_client')
+        bounded.BoundedBaseConnector = FakeConnector
+        sys.modules[bounded.__name__] = bounded
         sys.modules.update({
             'anyrun': anyrun,
             'anyrun.connectors': connectors,
@@ -270,9 +421,11 @@ class AsyncContractTests(unittest.TestCase):
         config.Config = type('Config', (), {
             'VERSION': 'test',
             'JOB_TIME_BUDGET_SECONDS': 5400,
+            'HEARTBEAT_SECONDS': 60, 'QUEUE_MAX_DEQUEUE_COUNT': 3,
         })
         processor = types.ModuleType('anyrun_mde_core.processor')
         processor.process_alert = process_alert
+        processor.RecoveryRequired = RecoveryRequired
         defender = types.ModuleType('anyrun_mde_core.defender')
         defender.MicrosoftDefender = Mock()
         job_status = types.ModuleType('anyrun_mde_core.job_status')
@@ -310,6 +463,8 @@ class AsyncContractTests(unittest.TestCase):
             analysis_options={'opt_timeout': 240},
             deadline_monotonic=ANY,
             status_callback=ANY,
+            checkpoint_callback=ANY,
+            resume_state={'state': 'queued', 'analyses': []},
         )
         completed = [
             call for call in self.status_store.update.call_args_list
@@ -340,14 +495,19 @@ class AsyncContractTests(unittest.TestCase):
         sandbox = types.ModuleType('anyrun.connectors.sandbox')
         base = types.ModuleType('anyrun.connectors.sandbox.base_connector')
         base.BaseSandboxConnector = FakeConnector
+        bounded = types.ModuleType('anyrun_mde_core.sandbox_client')
+        bounded.BoundedBaseConnector = FakeConnector
+        sys.modules[bounded.__name__] = bounded
         core = types.ModuleType('anyrun_mde_core')
         config = types.ModuleType('anyrun_mde_core.config')
         config.Config = type('Config', (), {
             'VERSION': 'test',
             'JOB_TIME_BUDGET_SECONDS': 5400,
+            'HEARTBEAT_SECONDS': 60, 'QUEUE_MAX_DEQUEUE_COUNT': 3,
         })
         processor = types.ModuleType('anyrun_mde_core.processor')
         processor.process_alert = process_alert
+        processor.RecoveryRequired = RecoveryRequired
         defender = types.ModuleType('anyrun_mde_core.defender')
         defender.MicrosoftDefender = Mock(return_value=defender_client)
         job_status = types.ModuleType('anyrun_mde_core.job_status')
@@ -378,7 +538,7 @@ class AsyncContractTests(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(RuntimeError, 'sample submission failed'):
-            module.main(FakeQueueMessage(payload))
+            module.main(FakeQueueMessage(payload, dequeue_count=3))
 
         defender_client.add_comment.assert_called_once()
         alert_id, comment = defender_client.add_comment.call_args.args
@@ -405,7 +565,7 @@ class AsyncContractTests(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(RuntimeError, 'No alert evidence'):
-            module.main(FakeQueueMessage(payload))
+            module.main(FakeQueueMessage(payload, dequeue_count=3))
 
         failed = [
             call for call in self.status_store.update.call_args_list
@@ -478,7 +638,7 @@ class AsyncContractTests(unittest.TestCase):
             'completed',
         )
 
-    def test_final_status_failure_does_not_poison_completed_analysis(self):
+    def test_final_status_failure_requests_safe_checkpoint_recovery(self):
         module, defender_client = self._load_worker_for_test(
             'final_status_failure_worker_under_test',
             Mock(return_value=[{'task_uuid': 'task-1'}]),
@@ -493,13 +653,14 @@ class AsyncContractTests(unittest.TestCase):
             RuntimeError('persistent blob failure'),
         ]
 
-        module.main(FakeQueueMessage({
-            'job_id': 'job-final-status',
-            'alert_id': 'alert-final-status',
-            'alert_source': 'WindowsDefenderAtp',
-            'machine_os_platform': 'windows',
-            'analysis_options': {'opt_timeout': 240},
-        }))
+        with self.assertRaisesRegex(RuntimeError, 'safe recovery will retry'):
+            module.main(FakeQueueMessage({
+                'job_id': 'job-final-status',
+                'alert_id': 'alert-final-status',
+                'alert_source': 'WindowsDefenderAtp',
+                'machine_os_platform': 'windows',
+                'analysis_options': {'opt_timeout': 240},
+            }))
 
         defender_client.add_comment.assert_called_once()
         self.assertIn(
@@ -537,7 +698,8 @@ class AsyncContractTests(unittest.TestCase):
         self.assertEqual(output['queueName'], 'anyrun-mde-jobs')
         self.assertEqual(output['queueName'], trigger['queueName'])
         self.assertEqual(output['connection'], trigger['connection'])
-        self.assertEqual(host['extensions']['queues']['maxDequeueCount'], 1)
+        config = load_module('queue_settings_config', SOURCE_DIR / 'anyrun_mde_core' / 'config.py')
+        self.assertEqual(host['extensions']['queues']['maxDequeueCount'], config.Config.QUEUE_MAX_DEQUEUE_COUNT)
 
     def test_status_function_returns_persisted_job_state(self):
         expected = {'job_id': 'job-1', 'state': 'completed'}
@@ -590,6 +752,7 @@ class AsyncContractTests(unittest.TestCase):
 
         self.assertEqual(LOGIC_TEMPLATE.read_text().count('DisableAsyncPattern'), 2)
         self.assertEqual(actions['Wait_until_evidence_is_submitted_to_ANYRUN']['type'], 'Until')
+        self.assertEqual(actions['Wait_until_evidence_is_submitted_to_ANYRUN']['limit'], {'count': 480, 'timeout': 'PT2H'})
         self.assertEqual(actions['Wait_until_ANYRUN_verdict_is_available']['type'], 'Until')
         self.assertEqual(
             actions['Wait_until_evidence_is_submitted_to_ANYRUN']['operationOptions'],

@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import types
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -73,6 +74,22 @@ class JobStatusStoreTests(unittest.TestCase):
         self.module = load_module()
         self.store = object.__new__(self.module.JobStatusStore)
         self.store._container = FakeContainer()
+        self.store._mutex = threading.RLock()
+
+    def test_heartbeat_preserves_history_uuid_and_terminal_state(self):
+        self.store.create('job-1', 'alert')
+        self.store.update('job-1', state='waiting_for_verdict', latest_analysis={'task_uuid': 'paid-task'})
+        before = self.store.get('job-1')
+        for _ in range(100):
+            self.store.touch('job-1')
+        status = self.store.get('job-1')
+        self.assertEqual(status['history'], before['history'])
+        self.assertEqual(status['latest_analysis']['task_uuid'], 'paid-task')
+        self.assertIn('heartbeat_at', status)
+        self.store.update('job-1', state='completed')
+        completed = self.store.get('job-1')
+        self.store.touch('job-1', state='processing')
+        self.assertEqual(self.store.get('job-1'), completed)
 
     def test_create_update_and_read_terminal_status(self):
         self.store.create('job-1', 'alert-1')

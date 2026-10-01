@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from json import JSONDecodeError, dumps
 
 import azure.functions as func
 
 from anyrun_mde_core.job_status import JobStatusStore
+from anyrun_mde_core.config import Config
 from anyrun_mde_core.utils import sanitize_error_text
 
 
@@ -37,7 +39,28 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     if status is None:
         return _response(404, {'message': 'ANY.RUN job status was not found.'})
-    return _response(200, status)
+    return _response(200, _mark_stale(status))
+
+
+def _mark_stale(status: dict, now: datetime | None = None) -> dict:
+    """Read-only liveness projection; do not overwrite a recoverable checkpoint."""
+    if status.get('state') in {'completed', 'failed'}:
+        return status
+    try:
+        updated = datetime.fromisoformat(status['updated_at'].replace('Z', '+00:00'))
+        age = ((now or datetime.now(timezone.utc)) - updated).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        age = Config.STALE_AFTER_SECONDS + 1
+    if age <= Config.STALE_AFTER_SECONDS:
+        return status
+    return {
+        **status, 'state': 'failed', 'stage': 'stale', 'error_type': 'StaleJob',
+        'error': (
+            f'No worker heartbeat for {int(age)} seconds. The worker may have stopped '
+            'or status storage may be unavailable. Check the saved task UUID and '
+            'Function App logs before Resubmit; Resubmit creates a new paid analysis.'
+        ),
+    }
 
 
 def _response(status_code: int, body: dict) -> func.HttpResponse:

@@ -20,7 +20,7 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 - Microsoft Defender for Endpoint
 - ANY.RUN API Key. To obtain it, please contact your [ANY.RUN account manager](https://app.any.run/contact-us/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=ms_defender_sandbox&utm_content=linktocontactus) directly or fill out [the request form](https://any.run/demo/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=ms_defender_sandbox&utm_content=linktodemo).
 - Microsoft Azure resources:
-  - Logic App with Flex Consumption plan
+  - Logic App Consumption plan
   - Function App Flex Consumption plan
   - Blob Storage
 
@@ -47,6 +47,59 @@ The connector uses a tracked asynchronous workflow:
 Long-running work never remains inside an HTTP request. This avoids the Logic
 App/Function HTTP timeout while still keeping the outcome visible in the same
 Logic App run.
+
+### Recovery after a worker restart
+
+Queue delivery is attempted up to three times. The worker stores a durable
+checkpoint for each evidence before submission and immediately after receiving
+its ANY.RUN task UUID. A retry resumes the same saved task without collecting
+its file or paying for another analysis. Saved verdicts and completed enrichment
+steps are reused. A renewing, 60-second blob lease prevents overlapping workers
+for the same job; it expires if the process dies.
+
+The worker writes a best-effort heartbeat every minute, including during Live
+Response. Heartbeats do not grow the transition history. The Status endpoint is
+read-only and projects an inactive nonterminal job as `failed/stale` after
+15 minutes without updates. This does not prove the analysis failed: Storage
+may be unavailable, and the task link remains the source for the sandbox result.
+Azure may return a crashed host's queue message after ten minutes, so the stale
+threshold intentionally leaves time for recovery and cold start.
+
+Verdict waiting uses bounded report requests every 20 seconds instead of an SSE
+stream. The deadline reads `opt_timeout` from the Logic App and adds a ten-minute
+margin. Reported remaining time or an explicit running status can extend it,
+subject to the persisted 90-minute overall budget, including retry delays.
+
+Report polling tolerates HTTP 404/409/425/429/5xx and transport failures inside
+the wait budget, with at most ten consecutive errors per delivery. Completion
+requires an explicit `done`/`completed`/100 status and a verdict; a missing or
+unknown status never turns a provisional verdict into a final one. Validate
+the running and completed report schema against your tenant before acceptance.
+GET requests are bounded at 60 seconds; paid analysis POSTs have a separate
+300-second limit, both capped by the remaining job budget. Explicit submission
+rejections (400/401/403/413/422) are terminal; an explicit 429 clears the intent
+and permits queue retry. Ambiguous POST failures still require manual recovery.
+
+Update both the Function ZIP and the Logic App submission loop limits:
+480 iterations and `PT2H`. Changing only the timeout leaves the old 240-iteration
+limit in place. Preserve your existing analysis options and connection settings.
+
+**Resubmit in Logic App creates a new job and can create another paid task.**
+For an interrupted job, first inspect its status blob and task UUID. After
+installing this update, replay the original queue payload with the **same job ID**
+to resume a recoverable job. Do not remove its status blob. Already terminal
+failed jobs require investigation before a deliberate recovery change.
+
+If the paid POST may have succeeded but no UUID was saved, the worker reports
+`RecoveryRequired` and refuses automatic resubmission. A hash match in account
+history is insufficient to identify the right task. Check the account history
+and restore the exact UUID before recovery. Comment checkpoints and checks of
+existing Defender comments avoid ordinary replay duplicates; the remote
+comment API has no transaction shared with Blob, so exactly-once writes across
+both systems cannot be guaranteed during an ambiguous network failure.
+
+Implementation choices, limitations and tenant acceptance checks are in
+[`SANDBOX-RECOVERY-REVIEW-2026-10-01.md`](SANDBOX-RECOVERY-REVIEW-2026-10-01.md).
 
 ## Prerequisites
 
@@ -179,20 +232,20 @@ In **Logic App > Runs history**, open a run and expand these actions:
   scores, task links, and IOC counts.
 
 The run stays in progress while the queue worker is active and succeeds only
-after the worker stores the final result. Worker failures terminate the Logic
-App run as failed and also add a best-effort failure comment to the Defender
-alert. Function/Application Insights remains the detailed diagnostic source.
+after the worker stores the final result. Recoverable worker failures leave it
+in progress while queue retries resume checkpoints; terminal failures terminate
+the run and add a best-effort comment to the Defender alert. Function/Application
+Insights remains the detailed diagnostic source.
 Job status is stored as JSON in the private `anyrun-job-status` blob container;
 API keys, credentials, file bytes, and SAS query strings are never written to
 that record.
 
 If Defender enrichment succeeds but the final job-status write fails, the
-worker deliberately does not poison the queue message: replay could create a
-second paid ANY.RUN task. The Logic App may consequently reach its polling
-limit and show `Failed` even though the analysis result is already present in
-Defender. In that degraded case, use the tracking-warning comment on the alert
-and the Function logs as the source of truth; do not automatically resubmit the
-Logic App run.
+worker requests a safe queue retry using its saved `enriched` checkpoints.
+If Storage remains unavailable, the Logic App may still show `Failed` through
+the stale-status projection despite a completed analysis. Use the tracking
+warning on the alert and Function logs to investigate; Logic App Resubmit
+creates a new job and is not a recovery of the existing task.
 
 Live Response permits only one active session per device. RunScript can execute
 for up to 10 minutes. The connector limits its own wait to 15 minutes and does

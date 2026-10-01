@@ -42,6 +42,7 @@ class DeploymentScriptTests(unittest.TestCase):
     def test_modes_and_parameter_validation(self):
         self.assertIn('[ValidateSet("Sandbox", "Feeds", "Both")]', self.text)
         self.assertIn('[ValidateSet("Audit", "Block")]', self.text)
+        self.assertIn('[ValidateSet("Direct", "Sentinel")]', self.text)
         self.assertNotIn('[ValidateSet("Allowed",', self.text)
         self.assertIn('[ValidateRange(1, 100)]', self.text)
         self.assertIn("function Assert-GuidValue", self.text)
@@ -262,6 +263,23 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn("minimum_confidence_threshold", source)
         self.assertNotRegex(source, r"minimum_confidence(?!_threshold)")
         self.assertIn("minimum_confidence_threshold = $FeedsMinimumConfidence", self.text)
+
+    def test_sentinel_feed_source_is_wired_through_deployment(self):
+        template = json.loads(FEEDS_FUNCTION.read_text(encoding="utf-8"))
+        self.assertEqual(
+            template["parameters"]["IndicatorSource"]["allowedValues"],
+            ["Direct", "Sentinel"],
+        )
+        for setting in (
+            "IndicatorSource",
+            "SentinelIndicatorSources",
+            "SentinelRequiredTags",
+            "SentinelMaxIndicators",
+        ):
+            self.assertIn(f"{setting} = $Feeds{setting}", self.text)
+        self.assertIn('$FeedsIndicatorSource -eq "Direct"', self.text)
+        self.assertIn('$feedsIndicatorSourceWasPassed', self.text)
+        self.assertIn('Existing TI Feeds Function App SentinelMaxIndicators', self.text)
 
     def test_feeds_action_does_not_allow_allowed_value(self):
         template = FEEDS_FUNCTION.read_text(encoding="utf-8")

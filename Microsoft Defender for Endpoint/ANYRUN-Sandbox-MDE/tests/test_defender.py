@@ -95,6 +95,14 @@ def make_defender(module):
 
 
 class MicrosoftDefenderTests(unittest.TestCase):
+    def test_replayed_comment_is_not_added_when_already_present(self):
+        defender = make_defender(self.module)
+        defender.deduplicate_comments = True
+        defender._make_request = Mock(return_value=FakeResponse(200, {'comments': [{'comment': 'same summary'}]}))
+        defender.add_comment('alert', 'same summary')
+        defender._make_request.assert_called_once()
+        self.assertEqual(defender._make_request.call_args.args[0], 'GET')
+
     @classmethod
     def setUpClass(cls):
         cls.module = load_defender_module()

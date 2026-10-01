@@ -46,9 +46,12 @@ class ArmTemplateTests(unittest.TestCase):
             'ANYRUN-Sandbox-MDE-Status/status.py',
             'ANYRUN-Sandbox-MDE-Status/function.json',
             'anyrun_mde_core/config.py',
+            'anyrun_mde_core/api_errors.py',
             'anyrun_mde_core/defender.py',
             'anyrun_mde_core/job_status.py',
             'anyrun_mde_core/processor.py',
+            'anyrun_mde_core/sandbox_client.py',
+            'host.json',
             'anyrun_mde_core/ANYRUN-SB-DEFENDER.ps1',
             'anyrun_mde_core/ANYRUN-SB-DEFENDER.sh',
         }

@@ -61,6 +61,7 @@ class MicrosoftDefender:
         self._config = Config
         self._log = log
         self._deadline_monotonic = deadline_monotonic
+        self.deduplicate_comments = False
 
         self._authenticate()
 
@@ -459,6 +460,12 @@ class MicrosoftDefender:
         :param comment: Text comment
         """
         url = f'{self._config.DEFENDER_API_BASE_URL}/api/alerts/{alert_id}'
+        if getattr(self, 'deduplicate_comments', False):
+            existing = self._make_request('GET', url=url)
+            if existing.status_code >= 300:
+                self._throw_error('Failed to check existing alert comments.', existing)
+            if any(item.get('comment') == comment for item in (existing.json().get('comments') or [])):
+                return
         payload = {'comment': comment}
 
         response = self._make_request('PATCH', url=url, data=json.dumps(payload))
@@ -798,7 +805,7 @@ class MicrosoftDefender:
 
         try:
             headers = self._setup_headers(data, stream) if authenticated else None
-            response = requests.request(method, url, headers=headers, data=data, stream=stream)
+            response = requests.request(method, url, headers=headers, data=data, stream=stream, timeout=(10, 60))
         except (requests.RequestException, OSError) as error:
             self._throw_error(f'Network request failed: {error}.')
 
@@ -813,6 +820,7 @@ class MicrosoftDefender:
                     headers=self._setup_headers(retry_data, stream),
                     data=retry_data,
                     stream=stream,
+                    timeout=(10, 60),
                 )
             except (requests.RequestException, OSError) as error:
                 self._throw_error(f'Network request failed after token refresh: {error}.')

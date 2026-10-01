@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +22,7 @@ class JobStatusStore:
     """Persist the safe, user-visible state of an asynchronous Sandbox job."""
 
     def __init__(self, connection_string: str, container_name: str) -> None:
+        self._mutex = threading.RLock()
         self._container = BlobServiceClient.from_connection_string(
             connection_string,
             # Application-level retries in the worker have explicit budgets.
@@ -83,6 +86,12 @@ class JobStatusStore:
         stage: str | None = None,
         **details: Any,
     ) -> dict[str, Any]:
+        # Heartbeat and checkpoints share this client in the worker. Serialize
+        # their read/modify/write cycles so a heartbeat cannot erase a UUID.
+        with self._mutex:
+            return self._update(job_id, state=state, stage=stage, **details)
+
+    def _update(self, job_id: str, *, state: str, stage: str | None = None, **details: Any) -> dict[str, Any]:
         status = self.get(job_id)
         if status is None:
             raise RuntimeError(f'ANY.RUN job status {job_id} does not exist.')
@@ -110,6 +119,35 @@ class JobStatusStore:
         status['history'] = history[-50:]
         self._write(status)
         return status
+
+    def touch(self, job_id: str, **details: Any) -> None:
+        """Refresh liveness without growing history or reviving terminal jobs."""
+        with self._mutex:
+            status = self.get(job_id)
+            if status is None or status.get('state') in {'completed', 'failed'}:
+                return
+            status.update(_json_safe(details))
+            status['updated_at'] = status['heartbeat_at'] = _utc_now()
+            self._write(status)
+
+    @contextmanager
+    def claim(self, job_id: str):
+        """One worker per job; the 60-second lease expires after process death."""
+        from azure.core.exceptions import ResourceExistsError
+        blob = self._container.get_blob_client(f'{_validate_job_id(job_id)}.lock')
+        try:
+            blob.upload_blob(b'', overwrite=False)
+        except ResourceExistsError:
+            pass
+        lease = blob.acquire_lease(lease_duration=60)
+        try:
+            yield lease
+        finally:
+            try:
+                lease.release()
+            except Exception:
+                # A lost lease must not replace the business exception.
+                pass
 
     def _write(self, status: dict[str, Any]) -> None:
         job_id = _validate_job_id(str(status['job_id']))

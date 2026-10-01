@@ -601,8 +601,8 @@
                             },
                             "expression": "@or(equals(variables('anyrun_job_status')?['state'], 'submitted_to_anyrun'), equals(variables('anyrun_job_status')?['state'], 'waiting_for_verdict'), equals(variables('anyrun_job_status')?['state'], 'analysis_completed'), equals(variables('anyrun_job_status')?['state'], 'completed'), equals(variables('anyrun_job_status')?['state'], 'failed'))",
                             "limit": {
-                                "count": 240,
-                                "timeout": "PT1H"
+                                "count": 480,
+                                "timeout": "PT2H"
                             },
                             "operationOptions": "FailWhenLimitsReached",
                             "type": "Until"

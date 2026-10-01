@@ -30,6 +30,17 @@ submits it to ANY.RUN, waits for the verdict, and enriches the alert. The Logic
 App does not hold that HTTP request open. Instead, it polls the short
 `ANYRUN-Sandbox-MDE-Status` Function and keeps the workflow run active.
 
+The submission loop now permits 480 iterations / `PT2H` to cover recovery
+inside the worker's 90-minute budget. Existing deployments need both limits
+updated, not only the Function ZIP. Preserve your current `opt_timeout`, other
+analysis options and connections when editing the workflow.
+
+Report polling requires a positive completion status (`done`, `completed`, 100)
+plus a verdict. Missing/unknown status does not mean completed. HTTP not-ready
+and transient failures are retried with a bounded wait; auth failures are not.
+Before tenant acceptance, capture the actual report schema for a running,
+completed and manually extended task with `Scripts/capture_sandbox_report.py`.
+
 In the Logic App run history, **Evidence submitted to ANY.RUN** displays the
 job ID, safe evidence metadata, SHA-256, task UUID, and task link. **ANY.RUN
 verdict received** displays the final state and an `analyses` array containing
@@ -44,11 +55,16 @@ bytes, credentials, API keys, or SAS query strings. On installer-created
 dedicated Storage Accounts, lifecycle rules delete evidence after one day and
 status records after seven days.
 
-A failed job is placed in `anyrun-mde-jobs-poison`; it is not retried
-automatically to avoid accidentally submitting the same sample more than once.
+A queue job has up to three deliveries. Retries resume saved per-evidence task
+UUIDs rather than submit again. After exhausted deliveries the message goes to
+`anyrun-mde-jobs-poison`. An uncertain submission without a saved UUID fails
+closed instead of guessing a matching task or paying again. See the recovery
+section in [README.md](README.md); Logic App **Resubmit** still starts a new job.
 
 The worker stops new work after a 90-minute application budget so it can report
-the failure before the two-hour Function timeout. Sandbox indicator match-alert
+the failure before the two-hour Function timeout. The 90-minute budget spans
+retries. Heartbeat runs every minute; after 15 minutes without an update the
+read-only Status endpoint returns `failed/stale` with recovery guidance. Sandbox indicator match-alert
 generation is disabled by default and can be enabled with
 `DefenderIndicatorGenerateAlert`. The optional one-day evidence lifecycle rule
 must only be enabled for a dedicated Storage Account; the automated installer

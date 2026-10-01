@@ -16,7 +16,7 @@
     "queues": {
       "batchSize": 1,
       "newBatchThreshold": 0,
-      "maxDequeueCount": 1,
+      "maxDequeueCount": 3,
       "visibilityTimeout": "00:05:00"
     }
   },
