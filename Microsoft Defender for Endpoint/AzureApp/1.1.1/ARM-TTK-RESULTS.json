@@ -1,0 +1,66 @@
+[
+  {
+    "package": "original-sandbox",
+    "suite": "Test-AzTemplate",
+    "results": 49,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  },
+  {
+    "package": "original-sandbox",
+    "suite": "Test-AzMarketplacePackage",
+    "results": 34,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  },
+  {
+    "package": "original-ti-feeds",
+    "suite": "Test-AzTemplate",
+    "results": 49,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  },
+  {
+    "package": "original-ti-feeds",
+    "suite": "Test-AzMarketplacePackage",
+    "results": 34,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  },
+  {
+    "package": "revised-sandbox",
+    "suite": "Test-AzTemplate",
+    "results": 49,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  },
+  {
+    "package": "revised-sandbox",
+    "suite": "Test-AzMarketplacePackage",
+    "results": 34,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  },
+  {
+    "package": "revised-ti-feeds",
+    "suite": "Test-AzTemplate",
+    "results": 49,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  },
+  {
+    "package": "revised-ti-feeds",
+    "suite": "Test-AzMarketplacePackage",
+    "results": 34,
+    "failed": 0,
+    "warnings": 0,
+    "failures": []
+  }
+]

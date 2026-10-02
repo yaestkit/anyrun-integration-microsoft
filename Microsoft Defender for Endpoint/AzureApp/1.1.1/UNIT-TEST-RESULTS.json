@@ -1,0 +1,14 @@
+{
+  "sandbox": {
+    "tests": 105,
+    "exit_code": 0
+  },
+  "ti-feeds": {
+    "tests": 26,
+    "exit_code": 0
+  },
+  "deployment": {
+    "tests": 30,
+    "exit_code": 0
+  }
+}
