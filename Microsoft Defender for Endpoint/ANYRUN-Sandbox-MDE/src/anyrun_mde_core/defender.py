@@ -591,6 +591,12 @@ class MicrosoftDefender:
                 live_response_id = response.json().get('id')
                 if not live_response_id:
                     self._throw_error('Live Response response did not include an action ID.', response)
+                self._log.info(
+                    'Live Response action %s accepted; waiting %s seconds before the first status check.',
+                    live_response_id,
+                    self._config.LIVE_RESPONSE_INITIAL_DELAY_SECONDS,
+                )
+                time.sleep(self._config.LIVE_RESPONSE_INITIAL_DELAY_SECONDS)
                 return live_response_id
             if not retryable or attempt == self._config.LIVE_RESPONSE_SUBMIT_RETRIES:
                 self._throw_error('Failed to execute live response job.', response)

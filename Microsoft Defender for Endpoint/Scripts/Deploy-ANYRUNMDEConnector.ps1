@@ -73,14 +73,6 @@ param(
   [int]$FeedsFetchDepthDays = 30,
   [ValidateRange(1, 100)]
   [int]$FeedsMinimumConfidence = 50,
-  [ValidateSet("Direct", "Sentinel")]
-  [string]$FeedsIndicatorSource = "Direct",
-  [ValidatePattern('^[^\r\n]{1,512}$')]
-  [string]$FeedsSentinelIndicatorSources = "ANY.RUN",
-  [ValidatePattern('^[^\r\n]{0,512}$')]
-  [string]$FeedsSentinelRequiredTags = "",
-  [ValidateRange(1, 15000)]
-  [int]$FeedsSentinelMaxIndicators = 10000,
   [ValidateSet("Audit", "Block")]
   [string]$DefenderIndicatorAction = "Audit",
   [bool]$DefenderIndicatorGenerateAlert = $false,
@@ -107,15 +99,15 @@ param(
   [string]$FeedsFunctionTemplateUri,
   [string]$FeedsLogicTemplateUri,
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxPackageSha256 = "e40b6076904e1f3622da34f8555aa2c4e129387520e4e5c726b7e2e5e8de35b9",
+  [string]$SandboxPackageSha256 = "e837b299d10d8d4e52af79ace2a458a7ec618a91d81b5c59375af1faad1b9966",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsPackageSha256 = "9bf862202b936c4f75edf1f43a870c1103a6a80ffcd625bfe3abcf6b41f91721",
+  [string]$FeedsPackageSha256 = "6f87fc5e7b5b6a51a645b3789c6b1c6756b5054c13e51374fd6b04bb6e9bcd41",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$SandboxFunctionTemplateSha256 = "7ec9b88be91c791a9c028252eed1eb85bfa9e9f864d17265f329f58479f721c7",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$SandboxLogicTemplateSha256 = "d71aff66069bc7a216449aa55ed09b5808b3540cbaf0ca2434cd7ef52516da5d",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsFunctionTemplateSha256 = "23c371594cf56bdd4d593ece9129ebb77a3f1c0a1ace100b59333dbf44720204",
+  [string]$FeedsFunctionTemplateSha256 = "e93cd0a4c97bd66481919af35b9fbc6f15859a300c2d743cd36a03bf812c53f4",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsLogicTemplateSha256 = "ddf86fc10ff613dc5df83e4d3dffc2d416fb3c78ae12c2ba18d337ea538a7d69",
   [string]$SandboxFunctionTemplateFile,
@@ -140,10 +132,6 @@ $feedsStorageNameWasPassed = $PSBoundParameters.ContainsKey("FeedsStorageAccount
 $regionWasPassed = $PSBoundParameters.ContainsKey("Region")
 $sandboxAppIdWasPassed = $PSBoundParameters.ContainsKey("SandboxAppId")
 $feedsAppIdWasPassed = $PSBoundParameters.ContainsKey("FeedsAppId")
-$feedsIndicatorSourceWasPassed = $PSBoundParameters.ContainsKey("FeedsIndicatorSource")
-$feedsSentinelSourcesWerePassed = $PSBoundParameters.ContainsKey("FeedsSentinelIndicatorSources")
-$feedsSentinelTagsWerePassed = $PSBoundParameters.ContainsKey("FeedsSentinelRequiredTags")
-$feedsSentinelLimitWasPassed = $PSBoundParameters.ContainsKey("FeedsSentinelMaxIndicators")
 
 $sandboxRoles = @(
   "Alert.ReadWrite.All",
@@ -1840,10 +1828,6 @@ if ($deployFeeds) {
     $existingClientId = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientID"
     $existingClientSecret = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientSecret"
     $existingApiKey = Get-ObjectPropertyValue -InputObject $settings -Name "ANYRUN_api_key"
-    $existingIndicatorSource = Get-ObjectPropertyValue -InputObject $settings -Name "IndicatorSource"
-    $existingSentinelSources = Get-ObjectPropertyValue -InputObject $settings -Name "SentinelIndicatorSources"
-    $existingSentinelTags = Get-ObjectPropertyValue -InputObject $settings -Name "SentinelRequiredTags"
-    $existingSentinelLimit = Get-ObjectPropertyValue -InputObject $settings -Name "SentinelMaxIndicators"
     if ($existingClientId) { $existingClientId = Assert-GuidValue -Value "$existingClientId" -Name "TI Feeds Function App AzureClientID" }
     if (-not $FeedsAppId) { $FeedsAppId = $existingClientId }
     elseif ($existingClientId -and $existingClientId -ne $FeedsAppId) {
@@ -1855,26 +1839,6 @@ if ($deployFeeds) {
     }
     if (-not $FeedsApiKey -and $existingApiKey) {
       $FeedsApiKey = ConvertTo-SecureValue -Value $existingApiKey
-    }
-    if (-not $feedsIndicatorSourceWasPassed -and $existingIndicatorSource) {
-      if ($existingIndicatorSource -notin @("Direct", "Sentinel")) {
-        throw "Existing TI Feeds Function App IndicatorSource '$existingIndicatorSource' is invalid."
-      }
-      $FeedsIndicatorSource = "$existingIndicatorSource"
-    }
-    if (-not $feedsSentinelSourcesWerePassed -and $existingSentinelSources) {
-      $FeedsSentinelIndicatorSources = "$existingSentinelSources"
-    }
-    if (-not $feedsSentinelTagsWerePassed -and $null -ne $existingSentinelTags) {
-      $FeedsSentinelRequiredTags = "$existingSentinelTags"
-    }
-    if (-not $feedsSentinelLimitWasPassed -and $existingSentinelLimit) {
-      $parsedSentinelLimit = 0
-      if (-not [int]::TryParse("$existingSentinelLimit", [ref]$parsedSentinelLimit) -or
-          $parsedSentinelLimit -lt 1 -or $parsedSentinelLimit -gt 15000) {
-        throw "Existing TI Feeds Function App SentinelMaxIndicators '$existingSentinelLimit' is invalid."
-      }
-      $FeedsSentinelMaxIndicators = $parsedSentinelLimit
     }
     Write-Host "  Recovered TI Feeds credentials from the existing Function App settings." -ForegroundColor Green
   }
@@ -1918,9 +1882,7 @@ if (-not $SkipFunctionApp) {
         AzureClientID = "00000000-0000-0000-0000-000000000000"; AzureClientSecret = $placeholderSecret
         AzureTenantID = $TenantId; AzureStorageAccountName = $FeedsStorageAccountName
         AzureStorageConnectionString = $placeholderSecret; LogAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
-        DefenderIndicatorAction = $DefenderIndicatorAction; IndicatorSource = $FeedsIndicatorSource
-        SentinelIndicatorSources = $FeedsSentinelIndicatorSources
-        SentinelRequiredTags = $FeedsSentinelRequiredTags; SentinelMaxIndicators = $FeedsSentinelMaxIndicators
+        DefenderIndicatorAction = $DefenderIndicatorAction
       }
   }
 }
@@ -1960,9 +1922,7 @@ if ($deploySandbox) {
 }
 if ($deployFeeds) {
   $feedsStorage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $FeedsStorageAccountName.ToLowerInvariant() -Location $Region
-  if ($FeedsIndicatorSource -eq "Direct" -and -not $FeedsApiKey) {
-    $FeedsApiKey = Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)"
-  }
+  if (-not $FeedsApiKey) { $FeedsApiKey = Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)" }
 }
 
 Write-Phase "2" "App Registration and API permissions"
@@ -2021,6 +1981,7 @@ if ($deployFeeds -and -not $SkipFunctionApp) {
     -AllowRoleCleanup (-not $feedsStorageNameWasPassed)
   $feedsFunctionParameters = @{
     functionAppName              = $FeedsFunctionName
+    anyrunApiKey                 = $FeedsApiKey
     AzureClientID                = $feedsIdentity.ClientId
     AzureClientSecret            = $feedsIdentity.ClientSecret
     AzureTenantID                = $TenantId
@@ -2028,12 +1989,7 @@ if ($deployFeeds -and -not $SkipFunctionApp) {
     AzureStorageConnectionString = $feedsStorage.ConnectionString
     LogAnalyticsWorkspaceName    = $LogAnalyticsWorkspaceName
     DefenderIndicatorAction      = $DefenderIndicatorAction
-    IndicatorSource              = $FeedsIndicatorSource
-    SentinelIndicatorSources     = $FeedsSentinelIndicatorSources
-    SentinelRequiredTags         = $FeedsSentinelRequiredTags
-    SentinelMaxIndicators        = $FeedsSentinelMaxIndicators
   }
-  if ($FeedsApiKey) { $feedsFunctionParameters.anyrunApiKey = $FeedsApiKey }
   try {
     Invoke-ArmDeployment -Label "TI Feeds Function App" -TemplateUri $FeedsFunctionTemplateUri `
       -TemplateFile $effectiveFeedsFunctionTemplate -TemplateParameters $feedsFunctionParameters | Out-Null

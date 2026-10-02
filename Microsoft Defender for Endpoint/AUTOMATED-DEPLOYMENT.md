@@ -4,9 +4,9 @@
 Feeds connector, or both from Azure Cloud Shell (PowerShell).
 
 Sandbox recovery follow-up (2026-10-01) requires updating the Function ZIP and
-the submission loop limits (480 / PT2H). See
-[`ANYRUN-Sandbox-MDE/SANDBOX-RECOVERY-AUDIT-FOLLOWUP-2026-10-01.md`](ANYRUN-Sandbox-MDE/SANDBOX-RECOVERY-AUDIT-FOLLOWUP-2026-10-01.md).
-The new Sandbox-only overlay does not publish artifacts to GitHub. Upload its
+the submission loop limits (480 / PT2H). See the recovery section in
+[`ANYRUN-Sandbox-MDE/README.md`](ANYRUN-Sandbox-MDE/README.md#recovery-after-a-worker-restart).
+The deployment archive does not publish artifacts to GitHub. Upload its
 reviewed Sandbox package, Logic template and installer together before using
 the GitHub-based installer; do not bypass a hash mismatch.
 
@@ -85,7 +85,7 @@ paid task. Heartbeats cover long operations, and the read-only Status endpoint
 projects a nonterminal job as `failed/stale` after 15 minutes without updates.
 Inspect the status blob and task link before recovery. Replay uses the original
 queue payload and job ID; Logic App Resubmit creates a new job. See
-[recovery review](ANYRUN-Sandbox-MDE/SANDBOX-RECOVERY-REVIEW-2026-10-01.md).
+[recovery documentation](ANYRUN-Sandbox-MDE/README.md#recovery-after-a-worker-restart).
 
 Example Application Insights query for worker failures:
 
@@ -131,9 +131,7 @@ check/time-of-use mismatch without permanently pinning checked-in templates.
 - An Entra role allowed to create applications and grant the requested
   `WindowsDefenderATP` application permissions. Tenant policy may impose
   additional restrictions.
-- The bare ANY.RUN API key for Sandbox and for Feeds `Direct` mode. Do not add
-  `API-KEY `. Feeds `Sentinel` mode reads the already-ingested Sentinel TI set
-  and does not require the Feeds API key in this deployment.
+- The bare ANY.RUN API key for each connector. Do not add `API-KEY `.
 - Outbound access from Cloud Shell to GitHub and Microsoft endpoints.
 
 The installer loads `Az.Accounts`, `Az.Resources`, `Az.Storage`,
@@ -241,38 +239,6 @@ the application-token calls that list/read MachineAction objects and obtain the
 Live Response result download link; `Machine.LiveResponse` alone only permits
 starting the action. The confidence setting is named
 `minimum_confidence_threshold` across the Logic App and Function runtime.
-
-### Sentinel-curated Feeds mode
-
-Use Sentinel as the curation layer without building a second Function App:
-
-```powershell
-./Deploy-ANYRUNMDEConnector.ps1 `
-  -Connector Feeds `
-  -FeedsIndicatorSource Sentinel `
-  -FeedsSentinelIndicatorSources "ANY.RUN" `
-  -FeedsSentinelRequiredTags "promote-to-mde" `
-  -FeedsMinimumConfidence 80 `
-  -DefenderIndicatorAction Audit
-```
-
-The exact source value must match the **Source** shown for the ANY.RUN TAXII
-indicators in Sentinel. Multiple values and required tags are comma-separated.
-An empty `FeedsSentinelRequiredTags` value promotes all active indicators that
-meet the source and confidence policy. `FeedsFetchDepthDays` is ignored in this
-mode because Sentinel validity and lifecycle fields define the snapshot.
-
-The Function App system-assigned identity receives **Microsoft Sentinel Reader**
-at the Log Analytics workspace. The deployment identity therefore needs role-
-assignment permission. The Function queries the current Sentinel
-`queryIndicators` management API and does not use the retired Graph
-`tiIndicator` API or the legacy `ThreatIntelligenceIndicator` table.
-
-`Direct` and `Sentinel` are alternate source modes. Do not run both against the
-same dedicated MDE App Registration: the client ID is the ownership boundary
-for replacement and stale deletion. See
-`ANYRUN-TI-Feeds-MDE/SENTINEL-TO-MDE.md` for the full selection and failure
-contract.
 
 Feeds downloads and validates a replacement set before deleting existing
 ANY.RUN-owned indicators. It follows Microsoft XDR pagination, supports IPv4,

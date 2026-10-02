@@ -100,6 +100,20 @@ class FunctionAppTemplateTests(unittest.TestCase):
         self.assertIn('/refs/heads/asyncv2/', package_uri)
         self.assertNotRegex(package_uri, r'/[0-9a-f]{40}/')
 
+    def test_direct_feed_requires_api_key_and_has_no_alternate_source(self):
+        self.assertEqual(self.template['parameters']['anyrunApiKey']['type'], 'securestring')
+        self.assertNotIn('defaultValue', self.template['parameters']['anyrunApiKey'])
+        self.assertNotIn('IndicatorSource', self.template['parameters'])
+        self.assertNotIn('sentinel', json.dumps(self.template).lower())
+        with zipfile.ZipFile(PACKAGE_PATH) as package:
+            self.assertFalse(any('sentinel' in name.lower() for name in package.namelist()))
+            for name in package.namelist():
+                if name.endswith('.py'):
+                    self.assertNotIn('Sentinel', package.read(name).decode('utf-8'))
+        connector = (SOURCE_DIR / 'ANYRUN-Feeds-MDE-FA' / 'anyrun_connector.py').read_text()
+        self.assertIn('feed_connector.process_enrichment()', connector)
+        self.assertNotIn('IndicatorSource', connector)
+
     def test_deployment_zip_contains_the_reviewed_sources(self):
         packaged_files = (
             'host.json',

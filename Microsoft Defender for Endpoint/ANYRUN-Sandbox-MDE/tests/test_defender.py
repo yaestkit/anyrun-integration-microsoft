@@ -179,15 +179,48 @@ class MicrosoftDefenderTests(unittest.TestCase):
                     return_value=FakeResponse(status_code, {'id': 'action-id'})
                 )
 
-                with patch.object(self.module.time, 'sleep'):
+                with patch.object(self.module.time, 'sleep') as sleep:
                     result = defender._run_live_response('machine-id', {'Commands': []})
 
                 self.assertEqual(result, 'action-id')
+                sleep.assert_called_once_with(10)
                 self.assertEqual(
                     defender._make_request.call_args.kwargs['url'],
                     'https://api.security.microsoft.com/api/machines/'
                     'machine-id/runliveresponse',
                 )
+
+    def test_live_response_initial_delay_occurs_only_after_acceptance(self):
+        defender = make_defender(self.module)
+        defender._wait_run_other_machine_actions = Mock()
+        defender._make_request = Mock(side_effect=[
+            FakeResponse(400, text='ActiveRequestAlreadyExists'),
+            FakeResponse(201, {'id': 'action-id'}),
+        ])
+        events = Mock()
+        events.attach_mock(defender._make_request, 'request')
+
+        with patch.object(self.module.time, 'sleep') as sleep:
+            events.attach_mock(sleep, 'sleep')
+            result = defender._run_live_response('machine-id', {'Commands': []})
+
+        self.assertEqual(result, 'action-id')
+        self.assertEqual(
+            [call[0] for call in events.mock_calls],
+            ['request', 'sleep', 'request', 'sleep'],
+        )
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [30, 10])
+
+    def test_live_response_missing_action_id_does_not_add_initial_delay(self):
+        defender = make_defender(self.module)
+        defender._wait_run_other_machine_actions = Mock()
+        defender._make_request = Mock(return_value=FakeResponse(201))
+
+        with patch.object(self.module.time, 'sleep') as sleep:
+            with self.assertRaises(RunTimeException):
+                defender._run_live_response('machine-id', {'Commands': []})
+
+        sleep.assert_not_called()
 
     def test_library_upload_builds_replayable_multipart_without_machine_context(self):
         defender = make_defender(self.module)
@@ -215,9 +248,11 @@ class MicrosoftDefenderTests(unittest.TestCase):
                     )
                 )
 
-                with self.assertRaises(RunTimeException) as raised:
-                    defender._run_live_response('machine-id', {'Commands': []})
+                with patch.object(self.module.time, 'sleep') as sleep:
+                    with self.assertRaises(RunTimeException) as raised:
+                        defender._run_live_response('machine-id', {'Commands': []})
 
+                sleep.assert_not_called()
                 self.assertEqual(raised.exception.status_code, status_code)
                 self.assertIn('Failed to execute live response job.', str(raised.exception))
                 self.assertIn(f'Status code: {status_code}', str(raised.exception))

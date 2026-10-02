@@ -736,6 +736,15 @@ class AsyncContractTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 500)
 
+    def test_queue_retries_after_one_minute_without_changing_attempt_limit(self):
+        host = json.loads((SOURCE_DIR / 'host.json').read_text())
+        queue = host['extensions']['queues']
+
+        self.assertEqual(queue['visibilityTimeout'], '00:01:00')
+        self.assertEqual(queue['maxDequeueCount'], 3)
+        self.assertEqual(queue['batchSize'], 1)
+        self.assertEqual(queue['newBatchThreshold'], 0)
+
     def test_status_endpoint_is_post_only_and_function_authorized(self):
         status = json.loads((STATUS_DIR / 'function.json').read_text())
         trigger = next(binding for binding in status['bindings'] if binding['type'] == 'httpTrigger')

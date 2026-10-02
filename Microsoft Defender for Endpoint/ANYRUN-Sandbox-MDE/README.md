@@ -50,7 +50,14 @@ Logic App run.
 
 ### Recovery after a worker restart
 
-Queue delivery is attempted up to three times. The worker stores a durable
+Queue delivery is attempted up to three times. After an ordinary worker failure,
+`visibilityTimeout` delays retry by 60 seconds (previously five minutes), plus
+queue polling and scheduling time. This allows faster recovery from transient
+failures, but uses the three attempts sooner during a sustained outage. It does
+not change Azure's ten-minute visibility timeout after a host crash or bypass
+the submission checkpoints that prevent duplicate paid tasks.
+
+The worker stores a durable
 checkpoint for each evidence before submission and immediately after receiving
 its ANY.RUN task UUID. A retry resumes the same saved task without collecting
 its file or paying for another analysis. Saved verdicts and completed enrichment
@@ -98,8 +105,8 @@ existing Defender comments avoid ordinary replay duplicates; the remote
 comment API has no transaction shared with Blob, so exactly-once writes across
 both systems cannot be guaranteed during an ambiguous network failure.
 
-Implementation choices, limitations and tenant acceptance checks are in
-[`SANDBOX-RECOVERY-REVIEW-2026-10-01.md`](SANDBOX-RECOVERY-REVIEW-2026-10-01.md).
+Deployment requirements and tenant verification steps are in
+[`DEPLOY-TO-AZURE.md`](DEPLOY-TO-AZURE.md).
 
 ## Prerequisites
 
@@ -252,7 +259,13 @@ for up to 10 minutes. The connector limits its own wait to 15 minutes and does
 not cancel another product's session. Avoid running this connector and a
 Sentinel playbook against the same device pool.
 
-After Defender accepts a new Live Response action, its `machineactions` read
+After Defender accepts a new Live Response action and returns its ID, the worker
+waits 10 seconds before the first status check. This initial delay happens only
+once per accepted action, not on every status check or failed submission. It is
+not a readiness guarantee and does not replace the success-status check.
+The subsequent Pending/InProgress polling interval remains 30 seconds.
+
+Its `machineactions` read
 endpoint can briefly return `404 ResourceNotFound`. The worker treats only that
 specific response as eventual consistency, retries every 10 seconds for up to
 3 minutes, and still fails immediately on other HTTP errors.
