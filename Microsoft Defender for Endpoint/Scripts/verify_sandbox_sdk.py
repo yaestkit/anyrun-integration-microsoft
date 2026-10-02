@@ -15,6 +15,9 @@ import time
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
+import aiohttp
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ANYRUN-Sandbox-MDE' / 'src'))
 
 from anyrun_mde_core.sandbox_client import BoundedWindowsConnector, BoundedLinuxConnector, BoundedBaseConnector
@@ -54,13 +57,18 @@ async def verify():
                 assert error.status_code == status
             else:
                 raise AssertionError('HTTP status was lost')
-        response.json.side_effect = ValueError('HTML error page')
-        try:
-            await client.get_analysis_report_async('offline-task')
-        except SandboxAPIError as error:
-            assert error.status_code == 503
-        else:
-            raise AssertionError('Non-JSON HTTP failure lost status')
+        for status in (401, 403, 413, 429, 502, 503):
+            response.status = status
+            response.json.side_effect = aiohttp.ContentTypeError(
+                request_info=Mock(real_url='https://api.any.run/offline'), history=(),
+                status=status, message='Unexpected mimetype: text/html',
+            )
+            try:
+                await client.get_analysis_report_async('offline-task')
+            except SandboxAPIError as error:
+                assert error.status_code == status
+            else:
+                raise AssertionError('Non-JSON HTTP failure lost status')
         response.json.side_effect = None
         response.status = 200
         client._session.request.side_effect = TimeoutError('offline timeout')
@@ -97,6 +105,15 @@ async def verify():
                 assert error.status_code == 429
             else:
                 raise AssertionError('Requests path lost HTTP status')
+        response.status_code = 413
+        response.json.side_effect = requests.exceptions.JSONDecodeError('Not JSON', '<html>', 0)
+        with patch('requests.request', return_value=response):
+            try:
+                await client.get_analysis_report_async('offline-task')
+            except SandboxAPIError as error:
+                assert error.status_code == 413
+            else:
+                raise AssertionError('Requests non-JSON failure lost HTTP status')
     store = JobStatusStore('UseDevelopmentStorage=true', 'status')
     blob = Mock()
     blob.upload_blob.side_effect = ResourceExistsError('lock blob already exists')

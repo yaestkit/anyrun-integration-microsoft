@@ -79,6 +79,33 @@ class SandboxClientTests(unittest.TestCase):
         with self.assertRaises(module.SandboxTransportError):
             asyncio.run(client._make_request_async('POST', 'https://api.any.run/v1/analysis'))
 
+    def test_html_http_errors_do_not_become_transport_errors(self):
+        module = load_client()
+        for method in ('GET', 'POST'):
+            for code in (401, 403, 413, 429, 502):
+                with self.subTest(method=method, code=code):
+                    client = module.BoundedWindowsConnector()
+                    client.request.return_value = Mock(
+                        status=code,
+                        json=AsyncMock(side_effect=module.aiohttp.ContentTypeError('text/html')),
+                    )
+                    with self.assertRaises(module.SandboxAPIError) as error:
+                        asyncio.run(client._make_request_async(method, 'https://api.any.run/v1/analysis'))
+                    self.assertEqual(error.exception.status_code, code)
+
+    def test_requests_non_json_http_errors_keep_their_status(self):
+        module = load_client()
+        # requests.JSONDecodeError inherits both ValueError and RequestException.
+        decode_error = type('JSONDecodeError', (ValueError, module.requests.RequestException), {})
+        client = module.BoundedWindowsConnector()
+        client._enable_requests = True
+        client.request.return_value = Mock(
+            status_code=413, json=Mock(side_effect=decode_error('HTML error page')),
+        )
+        with self.assertRaises(module.SandboxAPIError) as error:
+            asyncio.run(client._make_request_async('POST', 'https://api.any.run/v1/analysis'))
+        self.assertEqual(error.exception.status_code, 413)
+
     def test_requests_path_preserves_codes(self):
         module = load_client()
         client = module.BoundedWindowsConnector()

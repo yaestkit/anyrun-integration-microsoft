@@ -48,6 +48,10 @@ class BoundedRequests:
                 description = (payload.get('message') or payload.get('description')) if isinstance(payload, dict) else None
                 raise SandboxAPIError(status, str(description or 'Request rejected.'))
             return payload
+        except SandboxAPIError:
+            # A classified HTTP response is not an unknown transport outcome,
+            # even if JSON parsing attached a ClientError as its context.
+            raise
         except Exception as error:
             # Preserve transport errors wrapped by the SDK without guessing
             # from text. __context__ retains the original underlying exception.
