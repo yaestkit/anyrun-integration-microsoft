@@ -1,0 +1,26 @@
+{
+  "scriptFile": "anyrun_connector.py",
+  "bindings": [
+    {
+      "authLevel": "function",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": [
+        "post"
+      ]
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "$return"
+    },
+    {
+      "type": "queue",
+      "direction": "out",
+      "name": "job",
+      "queueName": "anyrun-mde-jobs",
+      "connection": "AzureWebJobsStorage"
+    }
+  ]
+}

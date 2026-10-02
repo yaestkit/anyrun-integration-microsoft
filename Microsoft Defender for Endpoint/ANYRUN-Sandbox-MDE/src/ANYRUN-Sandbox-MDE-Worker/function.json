@@ -1,0 +1,12 @@
+{
+  "scriptFile": "worker.py",
+  "bindings": [
+    {
+      "type": "queueTrigger",
+      "direction": "in",
+      "name": "job",
+      "queueName": "anyrun-mde-jobs",
+      "connection": "AzureWebJobsStorage"
+    }
+  ]
+}

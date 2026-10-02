@@ -1,0 +1,798 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "logicAppName": {
+            "defaultValue": "ANYRUN-Sandbox-MDE-LA",
+            "type": "String"
+        },
+        "azureTenantId": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure Tenant ID for authentication."
+            }
+        },
+        "azureClientId": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure Client ID for authentication."
+            }
+        },
+        "azureClientSecret": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Azure Client Secret for authentication."
+            }
+        },
+        "functionAppName": {
+            "defaultValue": "ANYRUN-Sandbox-MDE-FA",
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Function App to call."
+            }
+        },
+        "analysisPrivacyType": {
+            "type": "string",
+            "defaultValue": "owner",
+            "allowedValues": [
+                "owner",
+                "bylink"
+            ],
+            "metadata": {
+                "description": "ANY.RUN analysis visibility. The owner option requires a plan that supports private tasks."
+            }
+        }
+    },
+    "variables": {
+        "connectFunctionAppName": "[toLower(parameters('functionAppName'))]",
+        "wdatpConnectionName": "wdatp--anyrun-app",
+        "wdatpApiId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/wdatp')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2016-06-01",
+            "name": "[variables('wdatpConnectionName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "displayName": "[variables('wdatpConnectionName')]",
+                "customParameterValues": {},
+                "api": {
+                    "id": "[variables('wdatpApiId')]"
+                },
+                "parameterValues": {
+                    "token:tenantId": "[parameters('azureTenantId')]",
+                    "token:clientId": "[parameters('azureClientId')]",
+                    "token:clientSecret": "[parameters('azureClientSecret')]",
+                    "token:grantType": "client_credentials"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('logicAppName')]",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "Resource": "Microsoft Defender XDR",
+                "PlaybookTrigger": "Incident",
+                "Custom": "ANYRUN",
+                "PlaybookType": "Enrichment"
+            },
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Triggers_-_Trigger_when_new_WDATP_alert_occurs": {
+                            "type": "ApiConnectionWebhook",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['wdatp']['connectionId']"
+                                    }
+                                },
+                                "body": {
+                                    "clientState": "flow",
+                                    "changeType": "created",
+                                    "resource": "alerts",
+                                    "expirationDateTime": "2038-09-20T12:00:00Z",
+                                    "notificationUrl": "@listCallbackUrl()"
+                                },
+                                "path": "/subscriptions"
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Alerts_-_Get_single_alert": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['wdatp']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/api/alerts/@{encodeURIComponent(triggerBody()?['id'])}"
+                            }
+                        },
+                        "Machines_-_Get_single_machine": {
+                            "runAfter": {
+                                "Select_Entity_Types": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['wdatp']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/api/machines/@{encodeURIComponent(body('Alerts_-_Get_single_alert')?['machineId'])}"
+                            }
+                        },
+                        "Retrieve_machine_os_platform_value": {
+                            "runAfter": {
+                                "Machines_-_Get_single_machine": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "machine_os_platform",
+                                        "type": "string",
+                                        "value": "@{body('Machines_-_Get_single_machine')?['osPlatform']}"
+                                    }
+                                ]
+                            }
+                        },
+                        "ANY.RUN_Windows_analysis_options": {
+                            "runAfter": {
+                                "ANY.RUN_general_analysis_options": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "windows_env_version",
+                                        "type": "string",
+                                        "value": "10"
+                                    },
+                                    {
+                                        "name": "windows_env_bitness",
+                                        "type": "integer",
+                                        "value": 64
+                                    },
+                                    {
+                                        "name": "windows_env_type",
+                                        "type": "string",
+                                        "value": "complete"
+                                    },
+                                    {
+                                        "name": "windows_obj_ext_startfolder",
+                                        "type": "string",
+                                        "value": "temp"
+                                    },
+                                    {
+                                        "name": "windows_obj_ext_cmd",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "name": "windows_obj_force_elevation",
+                                        "type": "boolean",
+                                        "value": false
+                                    },
+                                    {
+                                        "name": "windows_obj_ext_browser",
+                                        "type": "string",
+                                        "value": "Microsoft Edge"
+                                    }
+                                ]
+                            }
+                        },
+                        "ANY.RUN_general_analysis_options": {
+                            "runAfter": {
+                                "Retrieve_machine_os_platform_value": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "opt_timeout",
+                                        "type": "integer",
+                                        "value": 240
+                                    },
+                                    {
+                                        "name": "opt_network_connect",
+                                        "type": "boolean",
+                                        "value": true
+                                    },
+                                    {
+                                        "name": "opt_network_fakenet",
+                                        "type": "boolean",
+                                        "value": false
+                                    },
+                                    {
+                                        "name": "opt_network_tor",
+                                        "type": "boolean",
+                                        "value": false
+                                    },
+                                    {
+                                        "name": "opt_network_geo",
+                                        "type": "string",
+                                        "value": "fastest"
+                                    },
+                                    {
+                                        "name": "opt_network_mitm",
+                                        "type": "boolean",
+                                        "value": false
+                                    },
+                                    {
+                                        "name": "opt_network_residential_proxy",
+                                        "type": "boolean",
+                                        "value": false
+                                    },
+                                    {
+                                        "name": "opt_network_residential_proxy_geo",
+                                        "type": "string",
+                                        "value": "fastest"
+                                    },
+                                    {
+                                        "name": "opt_privacy_type",
+                                        "type": "string",
+                                        "value": "[parameters('analysisPrivacyType')]"
+                                    },
+                                    {
+                                        "name": "obj_ext_extension",
+                                        "type": "boolean",
+                                        "value": true
+                                    },
+                                    {
+                                        "name": "env_locale",
+                                        "type": "string",
+                                        "value": "en-US"
+                                    },
+                                    {
+                                        "name": "user_tags",
+                                        "type": "string",
+                                        "value": "mde-alert"
+                                    }
+                                ]
+                            }
+                        },
+                        "ANY.RUN_Linux_analysis_options": {
+                            "runAfter": {
+                                "ANY.RUN_Windows_analysis_options": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "linux_env_os",
+                                        "type": "string",
+                                        "value": "ubuntu"
+                                    },
+                                    {
+                                        "name": "linux_obj_ext_startfolder",
+                                        "type": "string",
+                                        "value": "temp"
+                                    },
+                                    {
+                                        "name": "linux_obj_ext_cmd",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "name": "linux_run_as_root",
+                                        "type": "boolean",
+                                        "value": true
+                                    },
+                                    {
+                                        "name": "linux_obj_ext_browser",
+                                        "type": "string",
+                                        "value": "Google Chrome"
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_ANYRUN_job_tracking": {
+                            "runAfter": {
+                                "ANY.RUN_Linux_analysis_options": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "anyrun_job_id",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "name": "anyrun_job_status",
+                                        "type": "object",
+                                        "value": {
+                                            "state": "not_started",
+                                            "stage": "not_started"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "Check_if_the_alert_has_File_or_URL_entities": {
+                            "actions": {
+                                "Check_if_the_alert_is_from_EDR_or_Antivirus": {
+                                    "actions": {
+                                        "Is_machine_has_Windows_OS": {
+                                            "actions": {
+                                                "Execute_AnyRunDefender_using_Windows_VM": {
+                                                    "type": "Function",
+                                                    "inputs": {
+                                                        "body": {
+                                                            "alert_source": "@body('Alerts_-_Get_single_alert')?['detectionSource']",
+                                                            "alert_id": "@body('Alerts_-_Get_single_alert')?['id']",
+                                                            "machine_os_platform": "windows",
+                                                            "analysis_options": {
+                                                                "opt_network_connect": "@variables('opt_network_connect')",
+                                                                "opt_network_fakenet": "@variables('opt_network_fakenet')",
+                                                                "opt_network_tor": "@variables('opt_network_tor')",
+                                                                "opt_network_geo": "@variables('opt_network_geo')",
+                                                                "opt_network_mitm": "@variables('opt_network_mitm')",
+                                                                "opt_network_residential_proxy": "@variables('opt_network_residential_proxy')",
+                                                                "opt_network_residential_proxy_geo": "@variables('opt_network_residential_proxy_geo')",
+                                                                "opt_privacy_type": "@variables('opt_privacy_type')",
+                                                                "opt_timeout": "@variables('opt_timeout')",
+                                                                "env_version": "@variables('windows_env_version')",
+                                                                "env_bitness": "@variables('windows_env_bitness')",
+                                                                "env_type": "@variables('windows_env_type')",
+                                                                "env_locale": "@variables('env_locale')",
+                                                                "user_tags": "@variables('user_tags')",
+                                                                "obj_ext_extension": "@variables('obj_ext_extension')",
+                                                                "obj_ext_startfolder": "@variables('windows_obj_ext_startfolder')",
+                                                                "obj_ext_cmd": "@variables('windows_obj_ext_cmd')",
+                                                                "obj_force_elevation": "@variables('windows_obj_force_elevation')",
+                                                                "obj_ext_browser": "@variables('windows_obj_ext_browser')"
+                                                            }
+                                                        },
+                                                        "function": {
+                                                            "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Sandbox-MDE-FA')]"
+                                                        },
+                                                        "retryPolicy": {
+                                                            "type": "none"
+                                                        }
+                                                    },
+                                                    "operationOptions": "DisableAsyncPattern"
+                                                },
+                                                "Set_ANYRUN_job_id_for_Windows": {
+                                                    "runAfter": {
+                                                        "Execute_AnyRunDefender_using_Windows_VM": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "SetVariable",
+                                                    "inputs": {
+                                                        "name": "anyrun_job_id",
+                                                        "value": "@body('Execute_AnyRunDefender_using_Windows_VM')?['job_id']"
+                                                    }
+                                                }
+                                            },
+                                            "else": {
+                                                "actions": {
+                                                    "Is_machine_has_Linux_OS": {
+                                                        "actions": {
+                                                            "Execute_AnyRunDefender_using_Linux_VM": {
+                                                                "type": "Function",
+                                                                "inputs": {
+                                                                    "body": {
+                                                                        "alert_source": "@body('Alerts_-_Get_single_alert')?['detectionSource']",
+                                                                        "alert_id": "@body('Alerts_-_Get_single_alert')?['id']",
+                                                                        "machine_os_platform": "linux",
+                                                                        "analysis_options": {
+                                                                            "opt_network_connect": "@variables('opt_network_connect')",
+                                                                            "opt_network_fakenet": "@variables('opt_network_fakenet')",
+                                                                            "opt_network_tor": "@variables('opt_network_tor')",
+                                                                            "opt_network_geo": "@variables('opt_network_geo')",
+                                                                            "opt_network_mitm": "@variables('opt_network_mitm')",
+                                                                            "opt_network_residential_proxy": "@variables('opt_network_residential_proxy')",
+                                                                            "opt_network_residential_proxy_geo": "@variables('opt_network_residential_proxy_geo')",
+                                                                            "opt_privacy_type": "@variables('opt_privacy_type')",
+                                                                            "opt_timeout": "@variables('opt_timeout')",
+                                                                            "env_os": "@variables('linux_env_os')",
+                                                                            "env_locale": "@variables('env_locale')",
+                                                                            "user_tags": "@variables('user_tags')",
+                                                                            "obj_ext_startfolder": "@variables('linux_obj_ext_startfolder')",
+                                                                            "obj_ext_cmd": "@variables('linux_obj_ext_cmd')",
+                                                                            "obj_ext_extension": "@variables('obj_ext_extension')",
+                                                                            "run_as_root": "@variables('linux_run_as_root')",
+                                                                            "obj_ext_browser": "@variables('linux_obj_ext_browser')"
+                                                                        }
+                                                                    },
+                                                                    "function": {
+                                                                        "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Sandbox-MDE-FA')]"
+                                                                    },
+                                                                    "retryPolicy": {
+                                                                        "type": "none"
+                                                                    }
+                                                                },
+                                                                "operationOptions": "DisableAsyncPattern"
+                                                            },
+                                                            "Set_ANYRUN_job_id_for_Linux": {
+                                                                "runAfter": {
+                                                                    "Execute_AnyRunDefender_using_Linux_VM": [
+                                                                        "Succeeded"
+                                                                    ]
+                                                                },
+                                                                "type": "SetVariable",
+                                                                "inputs": {
+                                                                    "name": "anyrun_job_id",
+                                                                    "value": "@body('Execute_AnyRunDefender_using_Linux_VM')?['job_id']"
+                                                                }
+                                                            }
+                                                        },
+                                                        "else": {
+                                                            "actions": {
+                                                                "Requested_os_platform_is_not_supported_in_AnyRunDefender": {
+                                                                    "type": "Terminate",
+                                                                    "inputs": {
+                                                                        "runStatus": "Cancelled"
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                        "expression": {
+                                                            "or": [
+                                                                {
+                                                                    "contains": [
+                                                                        "@variables('machine_os_platform')",
+                                                                        "Ubuntu"
+                                                                    ]
+                                                                },
+                                                                {
+                                                                    "contains": [
+                                                                        "@variables('machine_os_platform')",
+                                                                        "Debian"
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        },
+                                                        "type": "If"
+                                                    }
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "contains": [
+                                                            "@variables('machine_os_platform')",
+                                                            "Windows"
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If"
+                                        }
+                                    },
+                                    "else": {
+                                        "actions": {
+                                            "Requested_alert_type_is_not_supported_in_AnyRunDefender": {
+                                                "type": "Terminate",
+                                                "inputs": {
+                                                    "runStatus": "Cancelled"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "expression": {
+                                        "or": [
+                                            {
+                                                "equals": [
+                                                    "@body('Alerts_-_Get_single_alert')?['detectionSource']",
+                                                    "WindowsDefenderAtp"
+                                                ]
+                                            },
+                                            {
+                                                "equals": [
+                                                    "@body('Alerts_-_Get_single_alert')?['detectionSource']",
+                                                    "WindowsDefenderAv"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If",
+                                    "description": ""
+                                }
+                            },
+                            "runAfter": {
+                                "Initialize_ANYRUN_job_tracking": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {
+                                    "Failed_to_find_File_or_Url_entities": {
+                                        "type": "Terminate",
+                                        "inputs": {
+                                            "runStatus": "Cancelled"
+                                        }
+                                    }
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@or(contains(body('Select_Entity_Types'), 'File'), contains(body('Select_Entity_Types'), 'Url'))",
+                                            true
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Wait_until_evidence_is_submitted_to_ANYRUN": {
+                            "actions": {
+                                "Delay_before_submission_status_check": {
+                                    "type": "Wait",
+                                    "inputs": {
+                                        "interval": {
+                                            "count": 15,
+                                            "unit": "Second"
+                                        }
+                                    }
+                                },
+                                "Get_ANYRUN_submission_status": {
+                                    "runAfter": {
+                                        "Delay_before_submission_status_check": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Function",
+                                    "inputs": {
+                                        "body": {
+                                            "job_id": "@variables('anyrun_job_id')"
+                                        },
+                                        "function": {
+                                            "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Sandbox-MDE-Status')]"
+                                        },
+                                        "retryPolicy": {
+                                            "type": "fixed",
+                                            "count": 3,
+                                            "interval": "PT5S"
+                                        }
+                                    }
+                                },
+                                "Set_ANYRUN_submission_status": {
+                                    "runAfter": {
+                                        "Get_ANYRUN_submission_status": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "anyrun_job_status",
+                                        "value": "@body('Get_ANYRUN_submission_status')"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Check_if_the_alert_has_File_or_URL_entities": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": "@or(equals(variables('anyrun_job_status')?['state'], 'submitted_to_anyrun'), equals(variables('anyrun_job_status')?['state'], 'waiting_for_verdict'), equals(variables('anyrun_job_status')?['state'], 'analysis_completed'), equals(variables('anyrun_job_status')?['state'], 'completed'), equals(variables('anyrun_job_status')?['state'], 'failed'))",
+                            "limit": {
+                                "count": 480,
+                                "timeout": "PT2H"
+                            },
+                            "operationOptions": "FailWhenLimitsReached",
+                            "type": "Until"
+                        },
+                        "Fail_if_ANYRUN_job_failed_before_submission": {
+                            "actions": {
+                                "Terminate_failed_ANYRUN_submission": {
+                                    "type": "Terminate",
+                                    "inputs": {
+                                        "runStatus": "Failed",
+                                        "runError": {
+                                            "code": "ANYRUNSubmissionFailed",
+                                            "message": "@coalesce(variables('anyrun_job_status')?['error'], 'ANY.RUN job failed before evidence submission.')"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Wait_until_evidence_is_submitted_to_ANYRUN": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {}
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@variables('anyrun_job_status')?['state']",
+                                            "failed"
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Evidence_submitted_to_ANYRUN": {
+                            "runAfter": {
+                                "Fail_if_ANYRUN_job_failed_before_submission": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Compose",
+                            "inputs": {
+                                "job_id": "@variables('anyrun_job_id')",
+                                "state": "@variables('anyrun_job_status')?['state']",
+                                "evidence_type": "@variables('anyrun_job_status')?['latest_analysis']?['analysis_type']",
+                                "evidence": "@variables('anyrun_job_status')?['latest_analysis']?['evidence']",
+                                "sha256": "@variables('anyrun_job_status')?['latest_analysis']?['sha256']",
+                                "task_uuid": "@variables('anyrun_job_status')?['latest_analysis']?['task_uuid']",
+                                "task_url": "@variables('anyrun_job_status')?['latest_analysis']?['task_url']"
+                            }
+                        },
+                        "Wait_until_ANYRUN_verdict_is_available": {
+                            "actions": {
+                                "Delay_before_verdict_status_check": {
+                                    "type": "Wait",
+                                    "inputs": {
+                                        "interval": {
+                                            "count": 30,
+                                            "unit": "Second"
+                                        }
+                                    }
+                                },
+                                "Get_ANYRUN_verdict_status": {
+                                    "runAfter": {
+                                        "Delay_before_verdict_status_check": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Function",
+                                    "inputs": {
+                                        "body": {
+                                            "job_id": "@variables('anyrun_job_id')"
+                                        },
+                                        "function": {
+                                            "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Sandbox-MDE-Status')]"
+                                        },
+                                        "retryPolicy": {
+                                            "type": "fixed",
+                                            "count": 3,
+                                            "interval": "PT5S"
+                                        }
+                                    }
+                                },
+                                "Set_ANYRUN_verdict_status": {
+                                    "runAfter": {
+                                        "Get_ANYRUN_verdict_status": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "anyrun_job_status",
+                                        "value": "@body('Get_ANYRUN_verdict_status')"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Evidence_submitted_to_ANYRUN": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": "@or(equals(variables('anyrun_job_status')?['state'], 'completed'), equals(variables('anyrun_job_status')?['state'], 'failed'))",
+                            "limit": {
+                                "count": 240,
+                                "timeout": "PT2H"
+                            },
+                            "operationOptions": "FailWhenLimitsReached",
+                            "type": "Until"
+                        },
+                        "Fail_if_ANYRUN_analysis_failed": {
+                            "actions": {
+                                "Terminate_failed_ANYRUN_analysis": {
+                                    "type": "Terminate",
+                                    "inputs": {
+                                        "runStatus": "Failed",
+                                        "runError": {
+                                            "code": "ANYRUNAnalysisFailed",
+                                            "message": "@coalesce(variables('anyrun_job_status')?['error'], 'ANY.RUN analysis failed.')"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Wait_until_ANYRUN_verdict_is_available": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {}
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@variables('anyrun_job_status')?['state']",
+                                            "failed"
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "ANYRUN_verdict_received": {
+                            "runAfter": {
+                                "Fail_if_ANYRUN_analysis_failed": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Compose",
+                            "inputs": {
+                                "job_id": "@variables('anyrun_job_id')",
+                                "state": "@variables('anyrun_job_status')?['state']",
+                                "analysis_count": "@variables('anyrun_job_status')?['analysis_count']",
+                                "analyses": "@variables('anyrun_job_status')?['analyses']",
+                                "completed_at": "@variables('anyrun_job_status')?['completed_at']"
+                            }
+                        },
+                        "Select_Entity_Types": {
+                            "runAfter": {
+                                "Alerts_-_Get_single_alert": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Select",
+                            "inputs": {
+                                "from": "@body('Alerts_-_Get_single_alert')?['evidence']",
+                                "select": "@item()?['entityType']"
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "wdatp": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('wdatpConnectionName'))]",
+                                "connectionName": "[variables('wdatpConnectionName')]",
+                                "id": "[variables('wdatpApiId')]"
+                            }
+                        }
+                    }
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('wdatpConnectionName'))]"
+            ]
+        }
+    ]
+}
