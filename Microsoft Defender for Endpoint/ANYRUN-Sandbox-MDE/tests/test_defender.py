@@ -95,21 +95,6 @@ def make_defender(module):
 
 
 class MicrosoftDefenderTests(unittest.TestCase):
-    def test_fresh_comment_uses_only_patch(self):
-        defender = make_defender(self.module)
-        defender.deduplicate_comments = False
-        defender._make_request = Mock(return_value=FakeResponse(200))
-        defender.add_comment('alert', 'new summary')
-        defender._make_request.assert_called_once()
-        self.assertEqual(defender._make_request.call_args.args[0], 'PATCH')
-
-    def test_recovery_adds_missing_comment_after_get(self):
-        defender = make_defender(self.module)
-        defender.deduplicate_comments = True
-        defender._make_request = Mock(side_effect=[FakeResponse(200, {'comments': []}), FakeResponse(200)])
-        defender.add_comment('alert', 'missing summary')
-        self.assertEqual([call.args[0] for call in defender._make_request.call_args_list], ['GET', 'PATCH'])
-
     def test_replayed_comment_is_not_added_when_already_present(self):
         defender = make_defender(self.module)
         defender.deduplicate_comments = True

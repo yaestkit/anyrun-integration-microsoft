@@ -112,22 +112,26 @@ def _run_job(job: func.QueueMessage, status_store: JobStatusStore, lease_lost: t
             error_type=None,
         )
 
-        def update_progress(state: str, details: dict) -> None:
+        def update_status(state: str, details: dict) -> None:
             if lease_lost.is_set():
                 raise RuntimeError('Worker lease was lost; stopping this delivery.')
+            if state == 'waiting_for_verdict' and 'latest_analysis' not in details:
+                try:
+                    status_store.touch(job_id, **details)
+                except Exception as error:
+                    logging.warning('Could not refresh verdict heartbeat: %s', type(error).__name__)
+                return
             # Progress telemetry must never abort a paid analysis. Terminal
-            # states and checkpoints retain retries. Only _keep_alive writes
-            # periodic heartbeats; optional progress is attempted once.
+            # states are persisted separately after the business work ends.
             _persist_status(
                 status_store,
                 job_id,
                 state=state,
                 stage=state,
-                attempts=1,
                 **details,
             )
 
-        def save_checkpoint(state: str, item: dict) -> None:
+        def checkpoint(state: str, item: dict) -> None:
             if lease_lost.is_set():
                 raise RuntimeError('Worker lease was lost; refusing further side effects.')
             identity = item.get('evidence_key') or item.get('task_uuid')
@@ -155,8 +159,8 @@ def _run_job(job: func.QueueMessage, status_store: JobStatusStore, lease_lost: t
             analyses = process_alert(
                 job_id=job_id, alert_id=alert_id, alert_source=payload['alert_source'],
                 machine_os_platform=payload['machine_os_platform'], analysis_options=payload['analysis_options'],
-                deadline_monotonic=deadline_monotonic, status_callback=update_progress,
-                checkpoint_callback=save_checkpoint, resume_state=resume_state,
+                deadline_monotonic=deadline_monotonic, status_callback=update_status,
+                checkpoint_callback=checkpoint, resume_state=resume_state,
             )
         if not analyses:
             raise RuntimeError('No alert evidence could be submitted to ANY.RUN.')

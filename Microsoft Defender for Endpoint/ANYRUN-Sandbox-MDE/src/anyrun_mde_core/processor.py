@@ -39,7 +39,7 @@ def process_alert(
     """Resume saved tasks before collecting any new evidence."""
     _check_deadline(deadline_monotonic)
     ms_defender = MicrosoftDefender(log, deadline_monotonic=deadline_monotonic)
-    ms_defender.deduplicate_comments = bool((resume_state or {}).get('work_started_at'))
+    ms_defender.deduplicate_comments = True
     saved = list((resume_state or {}).get('analyses') or [])
     latest = (resume_state or {}).get('latest_analysis')
     if isinstance(latest, dict) and not any(
@@ -163,11 +163,6 @@ def process_analysis(
     if item.get('enriched'):
         return item
 
-    # Fresh analyses cannot have comments from this task yet. On recovery the
-    # previous PATCH may have succeeded before its checkpoint was saved, so
-    # preserve the GET check for every unfinished comment operation.
-    ms_defender.deduplicate_comments = resume_item is not None
-
     def save(stage):
         item['stage'] = stage
         if checkpoint_callback is not None:
@@ -263,8 +258,6 @@ def _wait_for_report(connector, task_uuid, analysis_timeout_seconds, deadline_mo
     """Poll bounded HTTP requests; never enter the SDK's SSE iterator."""
     wait_deadline = time.monotonic() + analysis_timeout_seconds + Config.VERDICT_WAIT_MARGIN_SECONDS
     last_log = -math.inf
-    last_progress = None
-    last_progress_at = -math.inf
     consecutive_errors = 0
     while True:
         _check_deadline(deadline_monotonic)
@@ -313,13 +306,8 @@ def _wait_for_report(connector, task_uuid, analysis_timeout_seconds, deadline_mo
             # Accommodate manual extension when this report omits remaining.
             # The overall persisted 90-minute job budget still applies.
             wait_deadline = max(wait_deadline, now + Config.VERDICT_WAIT_MARGIN_SECONDS)
-        progress = {'anyrun_task_status': status, 'anyrun_seconds_remaining': remaining}
-        if progress != last_progress and (
-            status != (last_progress or {}).get('anyrun_task_status')
-            or now - last_progress_at >= Config.HEARTBEAT_SECONDS
-        ):
-            _emit_status(status_callback, 'waiting_for_verdict', **progress)
-            last_progress, last_progress_at = progress, now
+        _emit_status(status_callback, 'waiting_for_verdict', anyrun_task_status=status,
+                     anyrun_seconds_remaining=remaining)
         if now - last_log >= Config.HEARTBEAT_SECONDS:
             log.info('Waiting for ANY.RUN task %s: %s, remaining %s s.', task_uuid, status, remaining)
             last_log = now
