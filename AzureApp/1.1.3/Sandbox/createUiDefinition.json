@@ -6,7 +6,7 @@
     "config": {
       "isWizard": true,
       "basics": {
-        "description": "**ANY.RUN TI Feeds for Microsoft Defender for Endpoint** imports fresh ANY.RUN indicators (IP addresses, domains, URLs, file hashes and certificate thumbprints) into Microsoft Defender for Endpoint on a schedule.\n\nThe deployment creates a Function App (Flex Consumption), a Logic App, a Storage Account and Application Insights in the selected resource group.\n\nEach deployment creates a new instance; all its resources share the instance name. To update an existing instance, enter its instance name on this page.",
+        "description": "**ANY.RUN Sandbox for Microsoft Defender for Endpoint** automatically detonates files and URLs from new Defender for Endpoint alerts in the ANY.RUN Interactive Sandbox. The alert is enriched with the verdict, threat score, a link to the analysis and IOCs, and the IOCs are imported as Defender indicators.\n\nThe deployment creates a Function App (Flex Consumption), a Logic App with a Defender for Endpoint connection, a dedicated Storage Account and Application Insights in the selected resource group.\n\nEach deployment creates a new instance; all its resources share the instance name. To update an existing instance, enter its instance name on this page.",
         "location": {
           "label": "Region",
           "toolTip": "Region for all resources.",
@@ -36,7 +36,7 @@
         "visible": true,
         "options": {
           "style": "Info",
-          "text": "All resources of this deployment are named after the instance name, for example anyrun-feeds-mde-<instance name>-la. A random name is suggested, so this deployment creates a new instance. To update an existing instance, replace it with that instance's name (see the Instance tag on its resources; \"default\" means the field was left empty)."
+          "text": "All resources of this deployment are named after the instance name, for example anyrun-sandbox-mde-<instance name>-la. A random name is suggested, so this deployment creates a new instance. To update an existing instance, replace it with that instance's name (see the Instance tag on its resources; \"default\" means the field was left empty)."
         }
       },
       {
@@ -45,7 +45,7 @@
         "visible": true,
         "options": {
           "style": "Warning",
-          "text": "Each TI Feeds instance must use its own app registration. An instance removes indicators created by its client ID that are not in its own feed, so two instances sharing one app registration overwrite each other."
+          "text": "Each Sandbox instance subscribes to all new alerts of its Defender tenant. Two instances connected to the same tenant analyze every alert twice unless their Logic Apps use different alert filters."
         }
       },
       {
@@ -77,8 +77,18 @@
             "visible": true,
             "options": {
               "style": "Info",
-              "text": "Create an app registration in Microsoft Entra ID and grant it the WindowsDefenderATP application permissions Ti.Read.All, Ti.ReadWrite and Ti.ReadWrite.All with admin consent. Then create a client secret and enter the values below. Click here for step-by-step instructions.",
-              "uri": "https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE#app-registration"
+              "text": "Before you continue: create an app registration in Microsoft Entra ID and grant it the WindowsDefenderATP application permissions Alert.ReadWrite.All, Machine.LiveResponse, Machine.Read.All, Machine.ReadWrite.All, Ti.ReadWrite and Library.Manage with admin consent, then create a client secret. Use a dedicated app registration for this connector. Click here for step-by-step instructions.",
+              "uri": "https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#microsoft-defender-atp-api-permissions-for-new-app"
+            }
+          },
+          {
+            "name": "liveResponseInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "style": "Warning",
+              "text": "In the Microsoft Defender portal enable Settings > Endpoints > Advanced features: Live Response, Live Response for Servers and Live Response unsigned script execution. The connector uses Live Response to collect evidence files from devices.",
+              "uri": "https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#enable-live-response-sessions"
             }
           },
           {
@@ -134,7 +144,7 @@
             "type": "Microsoft.Common.DropDown",
             "label": "Indicator action",
             "defaultValue": "Audit",
-            "toolTip": "Response action applied to indicators created in Defender for Endpoint.",
+            "toolTip": "Action applied to IOCs that ANY.RUN finds and the connector imports as Defender indicators.",
             "constraints": {
               "required": true,
               "allowedValues": [
@@ -148,12 +158,19 @@
                 }
               ]
             }
+          },
+          {
+            "name": "generateAlert",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Generate a Defender alert when an imported indicator matches",
+            "defaultValue": false,
+            "toolTip": "Disabled by default to avoid an alert storm from Audit-mode indicators."
           }
         ]
       },
       {
         "name": "anyrun",
-        "label": "ANY.RUN TI Feeds",
+        "label": "ANY.RUN Sandbox",
         "elements": [
           {
             "name": "apiKeyInfo",
@@ -161,8 +178,8 @@
             "visible": true,
             "options": {
               "style": "Info",
-              "text": "An ANY.RUN TI Feeds API key is required. Contact your ANY.RUN account manager or request a demo to get one.",
-              "uri": "https://any.run/demo/?utm_source=azuremarketplace&utm_medium=integration&utm_campaign=ms_defender_tifeeds"
+              "text": "An ANY.RUN Sandbox API key is required. Contact your ANY.RUN account manager or request a demo to get one.",
+              "uri": "https://any.run/demo/?utm_source=azuremarketplace&utm_medium=integration&utm_campaign=ms_defender_sandbox"
             }
           },
           {
@@ -172,7 +189,7 @@
               "password": "ANY.RUN API key",
               "confirmPassword": "Confirm API key"
             },
-            "toolTip": "ANY.RUN API key with access to TI Feeds.",
+            "toolTip": "ANY.RUN API key without the 'API-KEY' prefix.",
             "constraints": {
               "required": true,
               "regex": "^.{12,}$",
@@ -183,50 +200,59 @@
             }
           },
           {
-            "name": "intervalRecurrence",
-            "type": "Microsoft.Common.Slider",
-            "label": "Import interval (hours)",
-            "min": 1,
-            "max": 24,
-            "defaultValue": 2,
-            "showStepMarkers": false,
-            "toolTip": "How often the Logic App imports the feed.",
+            "name": "privacyType",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Analysis visibility",
+            "defaultValue": "Private (owner)",
+            "toolTip": "Private tasks require an ANY.RUN plan that supports them.",
             "constraints": {
-              "required": true
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Private (owner)",
+                  "value": "owner"
+                },
+                {
+                  "label": "By link (bylink)",
+                  "value": "bylink"
+                }
+              ]
             }
           },
           {
-            "name": "feedFetchDepth",
-            "type": "Microsoft.Common.Slider",
-            "label": "Feed depth (days)",
-            "min": 1,
-            "max": 90,
-            "defaultValue": 30,
-            "showStepMarkers": false,
-            "toolTip": "How many days back to fetch indicators.",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
-            "name": "minimumConfidence",
-            "type": "Microsoft.Common.Slider",
-            "label": "Minimum confidence",
-            "min": 1,
-            "max": 100,
-            "defaultValue": 50,
-            "showStepMarkers": false,
-            "toolTip": "Import only indicators with confidence greater than or equal to this value.",
-            "constraints": {
-              "required": true
+            "name": "bylinkWarning",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[equals(steps('anyrun').privacyType, 'bylink')]",
+            "options": {
+              "style": "Warning",
+              "text": "A by-link analysis is accessible to anyone who obtains its link. Choose this only if your ANY.RUN plan does not support private tasks and your organization accepts this."
             }
           }
         ]
       },
       {
-        "name": "monitoring",
-        "label": "Monitoring",
+        "name": "storage",
+        "label": "Storage and monitoring",
         "elements": [
+          {
+            "name": "evidenceContainer",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Evidence container name",
+            "defaultValue": "anyrun-evidence",
+            "toolTip": "Private blob container in the dedicated Storage Account where Live Response uploads evidence files.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-z0-9](?!.*--)[a-z0-9-]{1,61}[a-z0-9]$",
+              "validationMessage": "3-63 characters: lowercase letters, digits and single hyphens; must start and end with a letter or digit."
+            }
+          },
+          {
+            "name": "lifecycle",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Delete evidence after 1 day and job status after 7 days",
+            "defaultValue": true,
+            "toolTip": "Adds lifecycle rules to the dedicated Storage Account created by this deployment."
+          },
           {
             "name": "workspaceMode",
             "type": "Microsoft.Common.OptionsGroup",
@@ -253,7 +279,7 @@
             "label": "Existing workspace",
             "resourceType": "Microsoft.OperationalInsights/workspaces",
             "toolTip": "Select an existing Log Analytics workspace.",
-            "visible": "[equals(steps('monitoring').workspaceMode, 'existing')]",
+            "visible": "[equals(steps('storage').workspaceMode, 'existing')]",
             "options": {
               "filter": {
                 "subscription": "onBasics",
@@ -273,11 +299,12 @@
       "azureClientId": "[steps('defender').clientId]",
       "azureClientSecret": "[steps('defender').clientSecret]",
       "defenderIndicatorAction": "[steps('defender').indicatorAction]",
+      "defenderIndicatorGenerateAlert": "[steps('defender').generateAlert]",
       "anyrunApiKey": "[steps('anyrun').apiKey]",
-      "intervalRecurrence": "[steps('anyrun').intervalRecurrence]",
-      "feedFetchDepth": "[steps('anyrun').feedFetchDepth]",
-      "minimumConfidenceThreshold": "[steps('anyrun').minimumConfidence]",
-      "logAnalyticsWorkspaceResourceId": "[if(equals(steps('monitoring').workspaceMode, 'existing'), steps('monitoring').workspace.id, '')]",
+      "analysisPrivacyType": "[steps('anyrun').privacyType]",
+      "evidenceContainerName": "[steps('storage').evidenceContainer]",
+      "configureEvidenceLifecyclePolicy": "[steps('storage').lifecycle]",
+      "logAnalyticsWorkspaceResourceId": "[if(equals(steps('storage').workspaceMode, 'existing'), steps('storage').workspace.id, '')]",
       "instanceName": "[basics('instanceName')]"
     }
   }

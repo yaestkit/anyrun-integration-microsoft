@@ -101,7 +101,7 @@ param(
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$SandboxPackageSha256 = "ffbda7d9f3a806e05aa696ca490bdc62a455e91d4930372c2b91c4dc61d4d44d",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsPackageSha256 = "6f87fc5e7b5b6a51a645b3789c6b1c6756b5054c13e51374fd6b04bb6e9bcd41",
+  [string]$FeedsPackageSha256 = "c55674c31a577737d50a4a21008d0b5fb462bff76c9cfdd75748adb1fdc26c45",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$SandboxFunctionTemplateSha256 = "7ec9b88be91c791a9c028252eed1eb85bfa9e9f864d17265f329f58479f721c7",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
