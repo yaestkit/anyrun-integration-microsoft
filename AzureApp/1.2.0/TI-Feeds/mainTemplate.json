@@ -1,0 +1,428 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.2.0.0",
+  "metadata": {
+    "description": "ANY.RUN TI Feeds for Microsoft Defender for Endpoint: Function App (Flex Consumption) + Logic App that imports ANY.RUN indicators into MDE on a schedule."
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "functionAppName": {
+      "type": "string",
+      "defaultValue": "[concat('anyrun-feeds-mde-', uniqueString(resourceGroup().id))]",
+      "minLength": 2,
+      "maxLength": 60,
+      "metadata": {
+        "description": "Globally unique name of the Function App."
+      }
+    },
+    "logicAppName": {
+      "type": "string",
+      "defaultValue": "ANYRUN-Feeds-MDE-LA",
+      "metadata": {
+        "description": "Name of the Logic App that runs the feed import on a schedule."
+      }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "defaultValue": "[concat('anyrunfeeds', uniqueString(resourceGroup().id))]",
+      "minLength": 3,
+      "maxLength": 24,
+      "metadata": {
+        "description": "Globally unique name of the Storage Account used by the Function App (3-24 lowercase letters and digits)."
+      }
+    },
+    "logAnalyticsWorkspaceResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an existing Log Analytics workspace for Application Insights. Leave empty to create a new workspace."
+      }
+    },
+    "anyrunApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "ANY.RUN API key."
+      }
+    },
+    "azureTenantId": {
+      "type": "string",
+      "defaultValue": "[subscription().tenantId]",
+      "metadata": {
+        "description": "Microsoft Entra tenant ID where the Defender for Endpoint app registration lives."
+      }
+    },
+    "azureClientId": {
+      "type": "string",
+      "metadata": {
+        "description": "Application (client) ID of the app registration with WindowsDefenderATP Ti.* permissions."
+      }
+    },
+    "azureClientSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Client secret of the app registration."
+      }
+    },
+    "defenderIndicatorAction": {
+      "type": "string",
+      "defaultValue": "Audit",
+      "allowedValues": [
+        "Audit",
+        "Block"
+      ],
+      "metadata": {
+        "description": "Response action applied to indicators created in Microsoft Defender for Endpoint."
+      }
+    },
+    "intervalRecurrence": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "maxValue": 24,
+      "metadata": {
+        "description": "How often the feed is imported, in hours."
+      }
+    },
+    "feedFetchDepth": {
+      "type": "int",
+      "defaultValue": 30,
+      "minValue": 1,
+      "maxValue": 90,
+      "metadata": {
+        "description": "Depth of the feed to fetch, in days."
+      }
+    },
+    "minimumConfidenceThreshold": {
+      "type": "int",
+      "defaultValue": 50,
+      "minValue": 1,
+      "maxValue": 100,
+      "metadata": {
+        "description": "Import indicators with confidence greater than or equal to this value (1-100)."
+      }
+    },
+    "_artifactsLocation": {
+      "type": "string",
+      "defaultValue": "[deployment().properties.templateLink.uri]",
+      "metadata": {
+        "description": "Base URI where artifacts required by this template are located."
+      }
+    },
+    "_artifactsLocationSasToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "SAS token to access _artifactsLocation (supplied automatically by the Marketplace)."
+      }
+    }
+  },
+  "variables": {
+    "createWorkspace": "[empty(parameters('logAnalyticsWorkspaceResourceId'))]",
+    "newWorkspaceName": "[concat(parameters('functionAppName'), '-law')]",
+    "workspaceResourceId": "[if(variables('createWorkspace'), resourceId('Microsoft.OperationalInsights/workspaces', variables('newWorkspaceName')), parameters('logAnalyticsWorkspaceResourceId'))]",
+    "appInsightsName": "[parameters('functionAppName')]",
+    "hostingPlanName": "[parameters('functionAppName')]",
+    "deploymentContainerName": "anyrunfeedsdeploymentcontainer",
+    "functionName": "ANYRUN-Feeds-MDE-FA",
+    "functionPackageUri": "[uri(parameters('_artifactsLocation'), concat('artifacts/ANYRUN-Feeds-MDE-FA.zip', parameters('_artifactsLocationSasToken')))]",
+    "resourceTags": {
+      "Vendor": "ANY.RUN",
+      "Solution": "ANY.RUN TI Feeds for Microsoft Defender for Endpoint"
+    },
+    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+  },
+  "resources": [
+    {
+      "condition": "[variables('createWorkspace')]",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2025-02-01",
+      "name": "[variables('newWorkspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('resourceTags')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[variables('appInsightsName')]",
+      "location": "[parameters('location')]",
+      "kind": "web",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('newWorkspaceName'))]"
+      ],
+      "tags": "[variables('resourceTags')]",
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[variables('workspaceResourceId')]"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2025-01-01",
+      "name": "[parameters('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "tags": "[variables('resourceTags')]",
+      "properties": {
+        "supportsHttpsTrafficOnly": true,
+        "minimumTlsVersion": "TLS1_2",
+        "defaultToOAuthAuthentication": true,
+        "allowBlobPublicAccess": false
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2025-01-01",
+      "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', variables('deploymentContainerName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+      ],
+      "properties": {
+        "publicAccess": "None"
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2025-05-01",
+      "name": "[variables('hostingPlanName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "tier": "FlexConsumption",
+        "name": "FC1"
+      },
+      "kind": "functionapp",
+      "tags": "[variables('resourceTags')]",
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2025-05-01",
+      "name": "[parameters('functionAppName')]",
+      "location": "[parameters('location')]",
+      "kind": "functionapp,linux",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('deploymentContainerName'))]",
+        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]"
+      ],
+      "tags": "[variables('resourceTags')]",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+        "httpsOnly": true,
+        "functionAppConfig": {
+          "deployment": {
+            "storage": {
+              "type": "blobContainer",
+              "value": "[concat(reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2025-01-01').primaryEndpoints.blob, variables('deploymentContainerName'))]",
+              "authentication": {
+                "type": "SystemAssignedIdentity"
+              }
+            }
+          },
+          "scaleAndConcurrency": {
+            "maximumInstanceCount": 40,
+            "instanceMemoryMB": 4096
+          },
+          "runtime": {
+            "name": "python",
+            "version": "3.12"
+          }
+        },
+        "siteConfig": {
+          "minTlsVersion": "1.2",
+          "appSettings": [
+            {
+              "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+              "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]"
+            },
+            {
+              "name": "AzureWebJobsStorage",
+              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', parameters('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2025-01-01').keys[0].value)]"
+            },
+            {
+              "name": "ANYRUN_api_key",
+              "value": "[parameters('anyrunApiKey')]"
+            },
+            {
+              "name": "AzureClientID",
+              "value": "[parameters('azureClientId')]"
+            },
+            {
+              "name": "AzureClientSecret",
+              "value": "[parameters('azureClientSecret')]"
+            },
+            {
+              "name": "AzureTenantID",
+              "value": "[parameters('azureTenantId')]"
+            },
+            {
+              "name": "DefenderIndicatorAction",
+              "value": "[parameters('defenderIndicatorAction')]"
+            }
+          ],
+          "ftpsState": "Disabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2025-05-01",
+      "name": "[format('{0}/{1}', parameters('functionAppName'), 'ftp')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+      ],
+      "properties": {
+        "allow": false
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2025-05-01",
+      "name": "[format('{0}/{1}', parameters('functionAppName'), 'scm')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+      ],
+      "properties": {
+        "allow": false
+      }
+    },
+    {
+      "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.Web/sites', parameters('functionAppName')), variables('storageBlobDataContributorRoleId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+        "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2025-05-01', 'Full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites/extensions",
+      "apiVersion": "2025-05-01",
+      "name": "[format('{0}/{1}', parameters('functionAppName'), 'onedeploy')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.Web/sites', parameters('functionAppName')), variables('storageBlobDataContributorRoleId')))]",
+        "[resourceId('Microsoft.Web/sites/basicPublishingCredentialsPolicies', parameters('functionAppName'), 'scm')]"
+      ],
+      "properties": {
+        "packageUri": "[variables('functionPackageUri')]",
+        "remoteBuild": true
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites/extensions', parameters('functionAppName'), 'onedeploy')]"
+      ],
+      "tags": "[variables('resourceTags')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "triggers": {
+            "Recurrence": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Hour",
+                "interval": "[parameters('intervalRecurrence')]"
+              },
+              "runtimeConfiguration": {
+                "concurrency": {
+                  "runs": 1
+                }
+              }
+            }
+          },
+          "actions": {
+            "Initialize_variables": {
+              "runAfter": {},
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "feed_fetch_depth",
+                    "type": "integer",
+                    "value": "[parameters('feedFetchDepth')]"
+                  },
+                  {
+                    "name": "minimum_confidence_threshold",
+                    "type": "integer",
+                    "value": "[parameters('minimumConfidenceThreshold')]"
+                  }
+                ]
+              }
+            },
+            "ANYRUNFeeds-AnyRunFeeds": {
+              "runAfter": {
+                "Initialize_variables": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Function",
+              "inputs": {
+                "body": {
+                  "feed_fetch_depth": "@variables('feed_fetch_depth')",
+                  "minimum_confidence_threshold": "@variables('minimum_confidence_threshold')"
+                },
+                "function": {
+                  "id": "[resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), variables('functionName'))]"
+                },
+                "method": "POST",
+                "retryPolicy": {
+                  "type": "none"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "functionAppName": {
+      "type": "string",
+      "value": "[parameters('functionAppName')]"
+    },
+    "logicAppName": {
+      "type": "string",
+      "value": "[parameters('logicAppName')]"
+    }
+  }
+}

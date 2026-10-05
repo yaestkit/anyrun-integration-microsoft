@@ -89,6 +89,69 @@ class ProcessorTests(unittest.TestCase):
         self.assertEqual(report['data']['status'], 'done')
         self.assertEqual(sleep.call_count, len(errors))
 
+    def test_unchanged_polling_progress_is_emitted_once(self):
+        module = load_processor(Mock())
+        connector, callback = Mock(), Mock()
+        connector.get_analysis_report.side_effect = [self.report(status='RUNNING')] * 4 + [self.report()]
+        clock = [0.0]
+        with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(module.time, 'sleep', side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)):
+            module._wait_for_report(connector, 'task', 240, status_callback=callback)
+        callback.assert_called_once()
+        self.assertEqual(connector.get_analysis_report.call_count, 5)
+
+    def test_remaining_time_progress_is_throttled_but_status_changes_are_immediate(self):
+        module = load_processor(Mock())
+        connector, callback = Mock(), Mock()
+        connector.get_analysis_report.side_effect = [
+            self.report(status='PREPARING', remaining=180),
+            self.report(status='RUNNING', remaining=160),
+            self.report(status='RUNNING', remaining=140),
+            self.report(status='RUNNING', remaining=120),
+            self.report(status='RUNNING', remaining=100),
+            self.report(),
+        ]
+        clock = [0.0]
+        with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(module.time, 'sleep', side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)):
+            module._wait_for_report(connector, 'task', 240, status_callback=callback)
+        self.assertEqual([call.kwargs if call.kwargs else call.args[1] for call in callback.call_args_list], [
+            {'anyrun_task_status': 'PREPARING', 'anyrun_seconds_remaining': 180.0},
+            {'anyrun_task_status': 'RUNNING', 'anyrun_seconds_remaining': 160.0},
+            {'anyrun_task_status': 'RUNNING', 'anyrun_seconds_remaining': 100.0},
+        ])
+
+    def test_fresh_analysis_skips_comment_reads_and_recovery_keeps_deduplication(self):
+        module = load_processor(Mock())
+        for resume in (None, {'analysis_type': 'file', 'evidence': 'x.exe', 'task_uuid': 'paid-task'}):
+            defender, connector = Mock(), Mock()
+            connector.run_file_analysis.return_value = 'paid-task'
+            connector.get_analysis_report.side_effect = [self.report(), []]
+            module.process_analysis('file', 'alert', connector, {}, defender,
+                                    file=b'x', filename='x.exe', resume_item=resume)
+            self.assertIs(defender.deduplicate_comments, resume is not None)
+            self.assertEqual(connector.run_file_analysis.call_count, 0 if resume else 1)
+
+    def test_recovery_rechecks_comment_after_its_checkpoint_write_failed(self):
+        module = load_processor(Mock())
+        defender, connector, saved = Mock(), Mock(), {}
+        connector.run_file_analysis.return_value = 'paid-task'
+
+        def checkpoint(stage, item):
+            if item.get('reference_commented'):
+                raise RuntimeError('comment checkpoint write failed')
+            saved.update(item)
+
+        with self.assertRaisesRegex(RuntimeError, 'comment checkpoint'):
+            module.process_analysis('file', 'alert', connector, {}, defender, file=b'x', filename='x.exe',
+                                    checkpoint_callback=checkpoint)
+        self.assertNotIn('reference_commented', saved)
+        self.assertEqual(saved['task_uuid'], 'paid-task')
+        connector.get_analysis_report.side_effect = [self.report(), []]
+        module.process_analysis('file', 'alert', connector, {}, defender, resume_item=saved)
+        self.assertTrue(defender.deduplicate_comments)
+        connector.run_file_analysis.assert_called_once()
+
     def test_polling_fails_on_auth_error_without_retry(self):
         module = load_processor(Mock())
         for code in (400, 401, 403):
