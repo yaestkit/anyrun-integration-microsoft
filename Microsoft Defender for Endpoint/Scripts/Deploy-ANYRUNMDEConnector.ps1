@@ -101,7 +101,7 @@ param(
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$SandboxPackageSha256 = "ffbda7d9f3a806e05aa696ca490bdc62a455e91d4930372c2b91c4dc61d4d44d",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsPackageSha256 = "c55674c31a577737d50a4a21008d0b5fb462bff76c9cfdd75748adb1fdc26c45",
+  [string]$FeedsPackageSha256 = "38256d0fbfebc09037ebb9ddf6eea40f272edd7c350747496a5ba5838244f843",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$SandboxFunctionTemplateSha256 = "7ec9b88be91c791a9c028252eed1eb85bfa9e9f864d17265f329f58479f721c7",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
@@ -309,9 +309,6 @@ function Show-ResourceGroupWriteAccess {
   if ($assignments.Count -eq 0) {
     Write-Host "  No built-in broad write assignments were returned. Custom roles and group membership still require review." -ForegroundColor Yellow
     return
-  }
-  foreach ($assignment in $assignments) {
-    Write-Host "    $($assignment.RoleDefinitionName): $($assignment.DisplayName) [$($assignment.ObjectType)] at $($assignment.Scope)" -ForegroundColor Yellow
   }
   Write-Host "  Treat this resource group as privileged: Function settings contain Defender workload credentials." -ForegroundColor Yellow
 }
