@@ -1,2176 +1,1268 @@
-#Requires -Version 7.0
-
+#Requires -Version 7.4
 <#
 .SYNOPSIS
-  Deploys the ANY.RUN Sandbox and/or TI Feeds connectors for Microsoft Defender
-  for Endpoint.
-
+  Installs ANY.RUN Sandbox, TI Feeds, or both in a new or explicitly approved Azure resource group.
 .DESCRIPTION
-  Interactive installer intended for Azure Cloud Shell (PowerShell). It creates
-  or reuses Entra app registrations, configures WindowsDefenderATP application
-  permissions, attempts to grant admin consent, prepares Azure resources, and
-  deploys the connector ARM templates.
-
-  The script is safe to re-run. Existing resource groups, dedicated connector
-  app registrations, workspaces, and storage accounts are reused. An App
-  Registration with permissions for another API is rejected as shared.
-
+  A single readable script downloads pinned, hash-verified release files. Run serially in PowerShell 7.4+, preferably
+  Azure Cloud Shell. Re-run the same command to finish an interrupted installation.
+  Existing integrations from other installers are never imported. See README.md.
 .EXAMPLE
-  ./Deploy-ANYRUNMDEConnector.ps1 -Connector Sandbox
-
+  ./Deploy-ANYRUNMDEConnector.ps1 -Connector Both -ResourceGroup rg-anyrun-mde
 .EXAMPLE
-  ./Deploy-ANYRUNMDEConnector.ps1 -Connector Feeds
-
-.EXAMPLE
-  ./Deploy-ANYRUNMDEConnector.ps1 -Connector Both
-
-.NOTES
-  The Sandbox connector still requires the operator to enable Defender Live
-  Response settings and to review the Defender Antivirus quarantine policy.
+  ./Deploy-ANYRUNMDEConnector.ps1 -Connector Feeds -PlanOnly
 #>
-
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
-  [Parameter(Mandatory = $true)]
-  [ValidateSet("Sandbox", "Feeds", "Both")]
-  [string]$Connector,
-
-  [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
-  [string]$TenantId,
-  [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
-  [string]$SubscriptionId,
-  [ValidatePattern('^[^<>%&:\\?/#]{1,90}(?<!\.)$')]
-  [string]$ResourceGroup,
-  [string]$Region = "eastus",
-  [string]$LogAnalyticsWorkspaceName,
-  [switch]$ForceGraphDeviceCode,
-
-  [string]$SandboxAppDisplayName = "ANYRUN-Sandbox-MDE-Connector",
-  [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
-  [string]$SandboxAppId,
-  [SecureString]$SandboxClientSecret,
+  [ValidateSet('Sandbox', 'Feeds', 'Both')][string]$Connector,
+  [ValidatePattern('^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$')][string]$TenantId,
+  [ValidatePattern('^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$')][string]$SubscriptionId,
+  [ValidatePattern('^[a-zA-Z0-9._()-]{1,80}$')][string]$ResourceGroup = 'rg-anyrun-mde',
+  [string]$Region = 'eastus',
+  [switch]$UseExistingResourceGroup,
+  [ValidateNotNull()][hashtable]$Tags = @{},
   [SecureString]$SandboxApiKey,
-  [string]$SandboxFunctionName,
-  [ValidatePattern('^[A-Za-z0-9._()-]{1,80}$')]
-  [string]$SandboxLogicAppName,
-  [string]$SandboxStorageAccountName,
-  [string]$SandboxBlobContainerName = "anyrun-quarantine",
-  [ValidateSet("owner", "bylink")]
-  [string]$SandboxAnalysisPrivacyType = "owner",
-
-  [string]$FeedsAppDisplayName = "ANYRUN-Feeds-MDE-Connector",
-  [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
-  [string]$FeedsAppId,
-  [SecureString]$FeedsClientSecret,
   [SecureString]$FeedsApiKey,
-  [string]$FeedsFunctionName,
-  [ValidatePattern('^[A-Za-z0-9._()-]{1,80}$')]
-  [string]$FeedsLogicAppName,
-  [string]$FeedsStorageAccountName,
-  [ValidateRange(1, 168)]
-  [int]$FeedsIntervalHours = 2,
-  [ValidateRange(1, 365)]
-  [int]$FeedsFetchDepthDays = 30,
-  [ValidateRange(1, 100)]
-  [int]$FeedsMinimumConfidence = 50,
-  [ValidateSet("Audit", "Block")]
-  [string]$DefenderIndicatorAction = "Audit",
-  [bool]$DefenderIndicatorGenerateAlert = $false,
-
-  [ValidateRange(1, 24)]
-  [int]$SecretLifetimeMonths = 6,
-
-  [switch]$SkipFunctionApp,
-  [switch]$SkipLogicApp,
-  [switch]$TestFeedsInvocation,
-  [switch]$NonInteractive,
-  [switch]$ConfirmDedicatedAppRegistration,
+  [switch]$RotateSecret,
+  [ValidateSet('AzureToken', 'Interactive')][string]$GraphAuthMode = 'AzureToken',
+  [switch]$InstallMissingModules,
   [switch]$ApproveDefenderPermissions,
-  [switch]$DeferConsent,
-  [switch]$RotateClientSecret,
-  [switch]$AllowUnverifiedArtifacts,
-
-  [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
-  [string]$Repository = "yaestkit/anyrun-integration-microsoft",
-  [ValidatePattern('^[A-Za-z0-9._/-]+$')]
-  [string]$RepositoryRef = "refs/heads/asyncv2",
-  [string]$SandboxFunctionTemplateUri,
-  [string]$SandboxLogicTemplateUri,
-  [string]$FeedsFunctionTemplateUri,
-  [string]$FeedsLogicTemplateUri,
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxPackageSha256 = "821594cfddaf9ceb32e7330ca9da8f4cfac4950b55b928206f37d7a93ee19bf4",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsPackageSha256 = "6f87fc5e7b5b6a51a645b3789c6b1c6756b5054c13e51374fd6b04bb6e9bcd41",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxFunctionTemplateSha256 = "7ec9b88be91c791a9c028252eed1eb85bfa9e9f864d17265f329f58479f721c7",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxLogicTemplateSha256 = "d71aff66069bc7a216449aa55ed09b5808b3540cbaf0ca2434cd7ef52516da5d",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsFunctionTemplateSha256 = "e93cd0a4c97bd66481919af35b9fbc6f15859a300c2d743cd36a03bf812c53f4",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsLogicTemplateSha256 = "ddf86fc10ff613dc5df83e4d3dffc2d416fb3c78ae12c2ba18d337ea538a7d69",
-  [string]$SandboxFunctionTemplateFile,
-  [string]$SandboxLogicTemplateFile,
-  [string]$FeedsFunctionTemplateFile,
-  [string]$FeedsLogicTemplateFile
+  [switch]$NonInteractive,
+  [switch]$PlanOnly,
+  [ValidateSet('Audit', 'Block')][string]$IndicatorAction = 'Audit',
+  [ValidateSet('owner', 'bylink')][string]$SandboxPrivacy = 'owner',
+  [ValidateRange(1, 168)][int]$FeedsIntervalHours = 2,
+  [ValidateRange(1, 365)][int]$FeedsFetchDepthDays = 30,
+  [ValidateRange(1, 100)][int]$FeedsMinimumConfidence = 50
 )
-
-$ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version 3.0
 
-$script:WindowsDefenderAtpAppId = "fc780465-2017-40d4-a0c5-307022471b92"
-$script:StorageBlobDataOwnerRoleId = "b7e6dc6d-f1e8-4753-8033-0f276bb0955b"
-$script:InstallerTagPrefix = "anyrun-mde-installer:v1"
-$script:GraphSessionOwned = $false
-$script:TemporaryFiles = [System.Collections.Generic.List[string]]::new()
-$script:DeferredConsentUrls = [System.Collections.Generic.List[string]]::new()
-$script:DeferredConnectorLabels = [System.Collections.Generic.List[string]]::new()
-$sandboxStorageNameWasPassed = $PSBoundParameters.ContainsKey("SandboxStorageAccountName")
-$feedsStorageNameWasPassed = $PSBoundParameters.ContainsKey("FeedsStorageAccountName")
-$regionWasPassed = $PSBoundParameters.ContainsKey("Region")
-$sandboxAppIdWasPassed = $PSBoundParameters.ContainsKey("SandboxAppId")
-$feedsAppIdWasPassed = $PSBoundParameters.ContainsKey("FeedsAppId")
-
-$sandboxRoles = @(
-  "Alert.ReadWrite.All",
-  "Machine.LiveResponse",
-  "Machine.Read.All",
-  "Machine.ReadWrite.All",
-  "Ti.ReadWrite",
-  "Library.Manage"
-)
-
-$feedsRoles = @(
-  "Ti.ReadWrite"
-)
-
-function Write-Banner {
-  param([Parameter(Mandatory = $true)][string]$Text)
-  Write-Host ""
-  Write-Host "========================================================================" -ForegroundColor Magenta
-  Write-Host "  $Text" -ForegroundColor Magenta
-  Write-Host "========================================================================" -ForegroundColor Magenta
-}
-
-function Write-Phase {
-  param([string]$Number, [string]$Text)
-  Write-Host ""
-  Write-Host "[$Number] $Text" -ForegroundColor Cyan
-  Write-Host ("-" * 72) -ForegroundColor DarkGray
-}
-
-function Write-Step {
-  param([string]$Text)
-  Write-Host "  -> $Text" -ForegroundColor Gray
-}
-
-function Read-Text {
-  param(
-    [Parameter(Mandatory = $true)][string]$Prompt,
-    [string]$Default,
-    [string]$ValidationPattern,
-    [string]$ValidationMessage = "Invalid value."
-  )
-
-  while ($true) {
-    $suffix = if ([string]::IsNullOrWhiteSpace($Default)) { "" } else { " [$Default]" }
-    if ($NonInteractive) {
-      if ([string]::IsNullOrWhiteSpace($Default)) { throw "Non-interactive deployment requires a value for: $Prompt" }
-      return $Default
-    }
-    $value = Read-Host "$Prompt$suffix"
-    if ([string]::IsNullOrWhiteSpace($value)) { $value = $Default }
-    if ([string]::IsNullOrWhiteSpace($value)) {
-      Write-Host "    A value is required." -ForegroundColor Red
-      continue
-    }
-    if ($ValidationPattern -and $value -notmatch $ValidationPattern) {
-      Write-Host "    $ValidationMessage" -ForegroundColor Red
-      continue
-    }
-    return $value.Trim()
+function Get-Field($Object, [string]$Name) {
+  if ($null -eq $Object) { return $null }
+  if ($Object -is [Collections.IDictionary]) {
+    foreach ($key in $Object.Keys) { if ("$key" -ieq $Name) { return $Object[$key] } }
+    return $null
   }
-}
-
-function Read-Choice {
-  param(
-    [Parameter(Mandatory = $true)][string]$Prompt,
-    [Parameter(Mandatory = $true)][string[]]$Options,
-    [int]$Default = 1
-  )
-
-  if ($NonInteractive) { throw "Non-interactive deployment cannot answer prompt: $Prompt" }
-  Write-Host ""
-  Write-Host "  $Prompt" -ForegroundColor White
-  for ($i = 0; $i -lt $Options.Count; $i++) {
-    $marker = if (($i + 1) -eq $Default) { " (default)" } else { "" }
-    Write-Host "    [$($i + 1)] $($Options[$i])$marker"
-  }
-
-  while ($true) {
-    $raw = Read-Host "  Choice"
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $Default }
-    $selected = 0
-    if ([int]::TryParse($raw, [ref]$selected) -and $selected -ge 1 -and $selected -le $Options.Count) {
-      return $selected
-    }
-    Write-Host "    Enter a number from 1 to $($Options.Count)." -ForegroundColor Red
-  }
-}
-
-function Confirm-Action {
-  param([Parameter(Mandatory = $true)][string]$Prompt, [bool]$Default = $true)
-  if ($NonInteractive) { return $Default }
-  $hint = if ($Default) { "Y/n" } else { "y/N" }
-  while ($true) {
-    $answer = (Read-Host "$Prompt [$hint]").Trim().ToLowerInvariant()
-    if (-not $answer) { return $Default }
-    if ($answer -in @("y", "yes")) { return $true }
-    if ($answer -in @("n", "no")) { return $false }
-  }
-}
-
-function Assert-GuidValue {
-  param([Parameter(Mandatory = $true)][string]$Value, [Parameter(Mandatory = $true)][string]$Name)
-  $parsed = [Guid]::Empty
-  if (-not [Guid]::TryParseExact($Value, "D", [ref]$parsed)) {
-    throw "$Name must be a canonical GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)."
-  }
-  return $parsed.ToString("D")
-}
-
-function Resolve-RepositoryCommit {
-  param([Parameter(Mandatory = $true)][string]$RepositoryName, [Parameter(Mandatory = $true)][string]$Ref)
-
-  if ($RepositoryName -ne "yaestkit/anyrun-integration-microsoft" -and -not $AllowUnverifiedArtifacts) {
-    throw "Repository '$RepositoryName' is not the reviewed repository for this test bundle. Use -AllowUnverifiedArtifacts only for an explicitly reviewed alternative repository."
-  }
-  if ($Ref -match '^[0-9a-fA-F]{40}$') { return $Ref.ToLowerInvariant() }
-  if ($Ref.Contains('..') -or $Ref.StartsWith('/') -or $Ref.EndsWith('/')) {
-    throw "RepositoryRef '$Ref' is not a safe Git reference."
-  }
-
-  $encodedRef = [Uri]::EscapeDataString($Ref)
-  Write-Step "Resolving repository ref '$Ref' to an immutable commit..."
-  try {
-    $commit = Invoke-RestMethod -Method GET -Uri "https://api.github.com/repos/$RepositoryName/commits/$encodedRef" `
-      -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "ANYRUN-MDE-Installer" }
-  } catch {
-    throw "Could not resolve repository ref '$Ref' in '$RepositoryName': $($_.Exception.Message)"
-  }
-  $sha = "$($commit.sha)"
-  if ($sha -notmatch '^[0-9a-fA-F]{40}$') { throw "GitHub returned an invalid commit SHA for '$Ref'." }
-  Write-Host "  Resolved artifact commit: $sha" -ForegroundColor Green
-  return $sha.ToLowerInvariant()
-}
-
-function Get-VerifiedRemoteFile {
-  param(
-    [Parameter(Mandatory = $true)][string]$Uri,
-    [Parameter(Mandatory = $true)][string]$Destination,
-    [string]$ExpectedSha256,
-    [Parameter(Mandatory = $true)][string]$Label
-  )
-
-  $parsedUri = [Uri]$Uri
-  if ($parsedUri.Scheme -ne 'https' -or $parsedUri.Host -ne 'raw.githubusercontent.com') {
-    if (-not $AllowUnverifiedArtifacts) {
-      throw "$Label URI must use https://raw.githubusercontent.com. Received '$Uri'."
-    }
-    Write-Host "  WARNING: $Label uses a non-allowlisted URI because -AllowUnverifiedArtifacts was supplied: $Uri" -ForegroundColor Yellow
-  }
-
-  Invoke-WebRequest -Uri $Uri -OutFile $Destination
-  $actualHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-    if (-not $AllowUnverifiedArtifacts) {
-      throw "$Label has no expected SHA-256. Supply the hash or explicitly use -AllowUnverifiedArtifacts for development only."
-    }
-    Write-Host "  WARNING: $Label is unverified; observed SHA-256 is $actualHash." -ForegroundColor Yellow
-  } elseif ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
-    if (-not $AllowUnverifiedArtifacts) {
-      throw "$Label SHA-256 mismatch. Expected $ExpectedSha256 but downloaded $actualHash."
-    }
-    Write-Host "  WARNING: $Label SHA-256 mismatch was overridden; expected $ExpectedSha256, observed $actualHash." -ForegroundColor Yellow
-  } else {
-    Write-Host "  Verified $Label SHA-256 ($actualHash)." -ForegroundColor Green
-  }
-  return $actualHash
-}
-
-function Show-ResourceGroupWriteAccess {
-  param([Parameter(Mandatory = $true)][string]$Scope)
-  Write-Step "Reviewing privileged write access to the connector resource group..."
-  $assignments = @(Get-AzRoleAssignment -Scope $Scope -ErrorAction SilentlyContinue | Where-Object {
-    $_.RoleDefinitionName -in @('Owner', 'Contributor', 'Website Contributor', 'User Access Administrator')
-  })
-  if ($assignments.Count -eq 0) {
-    Write-Host "  No built-in broad write assignments were returned. Custom roles and group membership still require review." -ForegroundColor Yellow
-    return
-  }
-  foreach ($assignment in $assignments) {
-    Write-Host "    $($assignment.RoleDefinitionName): $($assignment.DisplayName) [$($assignment.ObjectType)] at $($assignment.Scope)" -ForegroundColor Yellow
-  }
-  Write-Host "  Treat this resource group as privileged: Function settings contain Defender workload credentials." -ForegroundColor Yellow
-}
-
-function Read-RequiredSecret {
-  param([Parameter(Mandatory = $true)][string]$Prompt)
-  if ($NonInteractive) { throw "Non-interactive deployment requires the secret parameter for: $Prompt" }
-  while ($true) {
-    $secret = Read-Host $Prompt -AsSecureString
-    if ($secret -and $secret.Length -gt 0) { return $secret }
-    Write-Host "    A non-empty value is required." -ForegroundColor Red
-  }
-}
-
-function ConvertTo-SecureValue {
-  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
-  $secureValue = [SecureString]::new()
-  foreach ($character in $Value.ToCharArray()) { $secureValue.AppendChar($character) }
-  $secureValue.MakeReadOnly()
-  return $secureValue
-}
-
-function ConvertFrom-SecureValue {
-  param([Parameter(Mandatory = $true)][SecureString]$Value)
-  $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)
-  try {
-    return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-  } finally {
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
-  }
-}
-
-function ConvertTo-PowerShellLiteral {
-  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
-  $escapedValue = $Value.Replace("'", "''")
-  return "'$escapedValue'"
-}
-
-function Get-ModuleInstallationRoot {
-  param([Parameter(Mandatory = $true)]$ModuleInfo)
-  return (Split-Path -Parent (Split-Path -Parent $ModuleInfo.ModuleBase))
-}
-
-function Assert-ModuleCommands {
-  param(
-    [Parameter(Mandatory = $true)][string]$ModuleName,
-    [string[]]$RequiredCommands = @()
-  )
-  $missingCommands = @($RequiredCommands | Where-Object {
-    -not (Get-Command -Name $_ -ErrorAction SilentlyContinue)
-  })
-  if ($missingCommands.Count -gt 0) {
-    throw "PowerShell module '$ModuleName' is loaded but does not provide required commands: $($missingCommands -join ', '). Open a fresh Cloud Shell session after updating its module bundle."
-  }
-}
-
-function Ensure-Module {
-  param(
-    [Parameter(Mandatory = $true)][string]$Name,
-    [Parameter(Mandatory = $true)][Version]$MinimumVersion,
-    [string[]]$RequiredCommands = @()
-  )
-
-  # Azure Cloud Shell preloads a mutually compatible Az module bundle. Importing
-  # a newer CurrentUser submodule into that process can load a second private
-  # assembly (for example Az.Authorization.private) and fail. Once a module
-  # family is loaded, always select siblings from the same installation root.
-  $anchorName = if ($Name -like "Az.*") {
-    "Az.Accounts"
-  } elseif ($Name -like "Microsoft.Graph.*") {
-    "Microsoft.Graph.Authentication"
-  } else {
-    $null
-  }
-  $anchor = if ($anchorName) {
-    Get-Module -Name $anchorName | Sort-Object Version -Descending | Select-Object -First 1
-  } else {
-    $null
-  }
-  $anchorRoot = if ($anchor) { Get-ModuleInstallationRoot -ModuleInfo $anchor } else { $null }
-
-  $loaded = Get-Module -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
-  if ($loaded) {
-    if ($anchorRoot -and (Get-ModuleInstallationRoot -ModuleInfo $loaded) -ne $anchorRoot) {
-      # Cloud Shell can preload a CurrentUser submodule alongside its system
-      # Az.Accounts module. If PowerShell has already loaded both successfully,
-      # do not attempt to replace either one in-process. Validate the cmdlets
-      # below and continue with the established session instead.
-      Write-Host "  WARNING: $Name $($loaded.Version) is already loaded from a different module bundle; retaining the loaded module and validating required commands." -ForegroundColor Yellow
-    }
-    if ($loaded.Version -lt $MinimumVersion) {
-      Write-Host "  Using Cloud Shell's bundled $Name $($loaded.Version) (validated by required-command checks; tested version is $MinimumVersion)." -ForegroundColor Yellow
-    }
-    Assert-ModuleCommands -ModuleName $Name -RequiredCommands $RequiredCommands
-    return
-  }
-
-  $available = @(Get-Module -ListAvailable -Name $Name)
-  $selected = if ($anchorRoot) {
-    $available | Where-Object {
-      (Get-ModuleInstallationRoot -ModuleInfo $_) -eq $anchorRoot
-    } | Sort-Object Version -Descending | Select-Object -First 1
-  } else {
-    $available | Where-Object Version -ge $MinimumVersion |
-      Sort-Object Version -Descending | Select-Object -First 1
-  }
-
-  if (-not $selected -and $anchorRoot -and $Name -like "Microsoft.Graph.*") {
-    Write-Host "  Installing PowerShell module '$Name' $($anchor.Version) to match the loaded Graph module bundle..." -ForegroundColor Yellow
-    Install-Module -Name $Name -RequiredVersion $anchor.Version -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
-    $selected = Get-Module -ListAvailable -Name $Name | Where-Object {
-      (Get-ModuleInstallationRoot -ModuleInfo $_) -eq $anchorRoot -and $_.Version -eq $anchor.Version
-    } | Select-Object -First 1
-  }
-  if (-not $selected -and $anchorRoot) {
-    throw "PowerShell module '$Name' is not present in the currently loaded '$anchorName' bundle. Restart Cloud Shell before changing Az/Graph module versions; mixing module bundles in one process is unsafe."
-  }
-  if (-not $selected) {
-    Write-Host "  Installing PowerShell module '$Name' (minimum $MinimumVersion) for the current user..." -ForegroundColor Yellow
-    Install-Module -Name $Name -MinimumVersion $MinimumVersion -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
-    $selected = Get-Module -ListAvailable -Name $Name |
-      Where-Object Version -ge $MinimumVersion |
-      Sort-Object Version -Descending |
-      Select-Object -First 1
-  }
-  if (-not $selected) { throw "PowerShell module '$Name' could not be located after installation." }
-  if ($selected.Version -lt $MinimumVersion) {
-    Write-Host "  Using Cloud Shell's bundled $Name $($selected.Version) (validated by required-command checks; tested version is $MinimumVersion)." -ForegroundColor Yellow
-  }
-  Import-Module -FullyQualifiedName @{ ModuleName = $Name; RequiredVersion = $selected.Version } -ErrorAction Stop
-  Assert-ModuleCommands -ModuleName $Name -RequiredCommands $RequiredCommands
-}
-
-function ConvertFrom-AzRestContent {
-  param([Parameter(Mandatory = $true)]$Response)
-  if ([string]::IsNullOrWhiteSpace($Response.Content)) { return $null }
-  return $Response.Content | ConvertFrom-Json
-}
-
-function Get-ObjectPropertyValue {
-  param([Parameter(Mandatory = $true)]$InputObject, [Parameter(Mandatory = $true)][string]$Name)
-  $property = $InputObject.PSObject.Properties[$Name]
-  if ($property) { return $property.Value }
+  $p = $Object.PSObject.Properties[$Name]
+  if ($p) { return $p.Value }
   return $null
 }
 
-function Ensure-ResourceProvider {
-  param([Parameter(Mandatory = $true)][string]$ProviderNamespace)
-
-  $provider = Get-AzResourceProvider -ProviderNamespace $ProviderNamespace -ErrorAction SilentlyContinue
-  if ($provider -and $provider.RegistrationState -eq "Registered") {
-    Write-Host "  = $ProviderNamespace is registered." -ForegroundColor DarkGray
-    return
+function Protect-Message([hashtable]$C, [string]$Text) {
+  foreach ($value in $C.Secrets) {
+    if ($value) { $Text = $Text.Replace($value, '[REDACTED]') }
   }
-
-  Write-Step "Registering Azure resource provider '$ProviderNamespace'..."
-  Register-AzResourceProvider -ProviderNamespace $ProviderNamespace | Out-Null
-  for ($attempt = 1; $attempt -le 30; $attempt++) {
-    $provider = Get-AzResourceProvider -ProviderNamespace $ProviderNamespace -ErrorAction SilentlyContinue
-    if ($provider -and $provider.RegistrationState -eq "Registered") { return }
-    if ($attempt -lt 30) { Start-Sleep -Seconds 10 }
-  }
-  throw "Azure resource provider '$ProviderNamespace' did not reach Registered state within five minutes."
+  $Text = $Text -replace '(?i)(AccountKey=)[^;\s"<>]+', '$1[REDACTED]'
+  $Text = $Text -replace '(?i)([?&]sig=)[^&\s"<>]+', '$1[REDACTED]'
+  $Text = $Text -replace '(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+', '$1[REDACTED]'
+  $Text = $Text -replace '(?i)("(?:client_secret|secretText|ANYRUN_API_KEY|AzureClientSecret)"\s*:\s*")[^"]*', '$1[REDACTED]'
+  return $Text
 }
 
-function Test-EffectiveRoleAssignmentPermission {
-  param([Parameter(Mandatory = $true)][string]$Scope)
+function Get-PlainSecret([hashtable]$C, [SecureString]$Secret) {
+  $p = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secret)
+  try {
+    $text = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($p)
+    $C.Secrets.Add($text)
+    return $text
+  } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p) }
+}
 
-  $path = "$Scope/providers/Microsoft.Authorization/permissions?api-version=2022-04-01"
-  $response = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $path)
-  $target = "Microsoft.Authorization/roleAssignments/write"
-  foreach ($permission in @($response.value)) {
-    $allowed = @($permission.actions | Where-Object { $target -like $_ }).Count -gt 0
-    $denied = @($permission.notActions | Where-Object { $target -like $_ }).Count -gt 0
-    if ($allowed -and -not $denied) { return $true }
+function Get-Profile([hashtable]$C, [ValidateSet('Sandbox', 'Feeds')][string]$Kind) {
+  $scope = "$($C.Options.TenantId)/$($C.Options.SubscriptionId)/$($C.Options.ResourceGroup)/$Kind".ToLowerInvariant()
+  $digest = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($scope))
+  $instance = [Convert]::ToHexString($digest).ToLowerInvariant().Substring(0, 16)
+  $short = $instance.Substring(0, 10)
+  $key = $Kind.ToLowerInvariant()
+  $roles = @(if ($Kind -eq 'Sandbox') {
+      @('Alert.ReadWrite.All', 'Machine.LiveResponse', 'Machine.ReadWrite.All', 'Ti.ReadWrite', 'Library.Manage')
+    } else { @('Ti.ReadWrite') })
+  $hashes = if ($Kind -eq 'Sandbox') {
+    @{Function = '7ec9b88be91c791a9c028252eed1eb85bfa9e9f864d17265f329f58479f721c7'
+      Logic = 'd71aff66069bc7a216449aa55ed09b5808b3540cbaf0ca2434cd7ef52516da5d'
+      Package = 'ffbda7d9f3a806e05aa696ca490bdc62a455e91d4930372c2b91c4dc61d4d44d'
+    }
+  } else {
+    @{Function = 'e93cd0a4c97bd66481919af35b9fbc6f15859a300c2d743cd36a03bf812c53f4'
+      Logic = 'ddf86fc10ff613dc5df83e4d3dffc2d416fb3c78ae12c2ba18d337ea538a7d69'
+      Package = '6f87fc5e7b5b6a51a645b3789c6b1c6756b5054c13e51374fd6b04bb6e9bcd41'
+    }
+  }
+  return @{Kind = $Kind
+    Instance = $instance
+    Tag = "anyrun-customer:v1:${key}:$instance"
+    Roles = $roles
+    Hashes = $hashes
+    Function = "anyrun-$key-mde-$short"
+    Logic = "anyrun-$key-mde-la-$short"
+    Storage = "ar$(if ($Kind -eq 'Sandbox') { 'sb' } else { 'fd' })$instance"
+    Connection = "wdatp-anyrun-$short"
+    AppName = "ANY.RUN $Kind MDE ($instance)"
+    Handlers = @($(if ($Kind -eq 'Sandbox') { @('ANYRUN-Sandbox-MDE-FA', 'ANYRUN-Sandbox-MDE-Worker', 'ANYRUN-Sandbox-MDE-Status') }
+        else { @('ANYRUN-Feeds-MDE-FA') }))
+  }
+}
+
+function Get-Artifact([hashtable]$C, $Profiles) {
+  $assets = Join-Path $C.Root 'Assets'
+  $null = [IO.Directory]::CreateDirectory($assets)
+  $commit = 'cf9308a0fe13db7209f5663b40f0e489bb4d6b87'
+  $base = "https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/$commit/Microsoft%20Defender%20for%20Endpoint"
+  foreach ($p in $Profiles) {
+    $folder = if ($p.Kind -eq 'Sandbox') { 'ANYRUN-Sandbox-MDE' } else { 'ANYRUN-TI-Feeds-MDE' }
+    $prefix = if ($p.Kind -eq 'Sandbox') { 'ANYRUN-Sandbox-MDE' } else { 'ANYRUN-Feeds-MDE' }
+    foreach ($part in @('Function', 'Logic', 'Package')) {
+      $path = if ($part -eq 'Package') { "Function%20App/$prefix-FA.zip" }
+      elseif ($part -eq 'Function') { "Function%20App/$prefix-FA.json" } else { "Logic%20App/$prefix-LA.json" }
+      $suffix = if ($part -eq 'Package') { 'zip' } else { "$part.json" }
+      $file = Join-Path $assets "$($p.Kind).$suffix"
+      Invoke-WebRequest -Uri "$base/$folder/$path" -OutFile $file -TimeoutSec 60 -ErrorAction Stop
+      if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $p.Hashes[$part]) {
+        throw "Downloaded $($p.Kind) $part failed SHA-256 verification; no Azure/Graph changes were made."
+      }
+      if ($part -ne 'Package') { Convert-DeploymentTemplate $file $p.Kind $part }
+    }
+    $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $assets "$($p.Kind).zip"))
+    try {
+      $names = @($zip.Entries | ForEach-Object FullName)
+      foreach ($name in @('host.json', 'requirements.txt', "$($p.Handlers[0])/function.json")) {
+        if ($name -notin $names) { throw "Invalid $($p.Kind) Function ZIP: missing $name." }
+      }
+    } finally { $zip.Dispose() }
+  }
+}
+
+function Convert-DeploymentTemplate([string]$File, [string]$ConnectorKind, [string]$TemplateKind) {
+  $t = Get-Content -LiteralPath $File -Raw | ConvertFrom-Json -AsHashtable
+  foreach ($key in @('InstallerInstance', 'InstallerAppObjectId', 'InstallerCredentialKeyId', 'DeploymentRegion')) {
+    $t.parameters[$key] = @{type = 'string' }
+  }
+  $t.parameters.ResourceTags = @{type = 'object' }
+  if ($TemplateKind -eq 'Function') {
+    $t.parameters.PackageUri = @{type = 'securestring' }
+    $t.parameters.DeploymentStorageBlobEndpoint = @{type = 'string' }
+    $t.variables.storageRoleDefinitionId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+    if ($ConnectorKind -eq 'Sandbox') { $t.parameters.DefenderIndicatorGenerateAlert.defaultValue = $true }
+    # Storage is created separately. ARM must not reset its account/network policy.
+    $t.resources = @($t.resources | Where-Object {
+        $_.type -notin @('Microsoft.Storage/storageAccounts', 'Microsoft.Storage/storageAccounts/blobServices',
+          'Microsoft.Storage/storageAccounts/fileServices', 'Microsoft.Storage/storageAccounts/fileServices/shares')
+      })
+  } else {
+    $t.parameters.WorkflowState = @{type = 'string'
+      defaultValue = 'Enabled'
+      allowedValues = @('Enabled', 'Disabled')
+    }
+    if ($ConnectorKind -eq 'Sandbox') {
+      $t.parameters.ConnectionName = @{type = 'string' }
+      $t.variables.wdatpConnectionName = "[parameters('ConnectionName')]"
+      $t.variables.wdatpApiId = "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', parameters('DeploymentRegion'), '/managedApis/wdatp')]"
+    }
+  }
+  foreach ($r in $t.resources) {
+    if ($r.ContainsKey('location')) { $r.location = "[parameters('DeploymentRegion')]" }
+    if ($r.ContainsKey('dependsOn')) {
+      $r.dependsOn = @($r.dependsOn | Where-Object { $_ -notmatch "resourceId\('Microsoft.Storage/storageAccounts(?:/blobServices)?'," })
+      if (-not $r.dependsOn.Count) { $null = $r.Remove('dependsOn') }
+    }
+    switch ($r.type) {
+      'Microsoft.Web/sites' {
+        $r.properties.functionAppConfig.deployment.storage.value = "[concat(parameters('DeploymentStorageBlobEndpoint'), variables('deploymentStorageContainerName'))]"
+      }
+      'Microsoft.Resources/deployments' {
+        $r.name = "AssignFunctionStorageRole-$ConnectorKind"
+      }
+      'Microsoft.Web/sites/extensions' {
+        $r.properties.packageUri = "[parameters('PackageUri')]"
+        $r.dependsOn = @("[resourceId('Microsoft.Resources/deployments', 'AssignFunctionStorageRole-$ConnectorKind')]")
+      }
+      'Microsoft.Logic/workflows' {
+        $null = $r.Remove('identity')
+        $r.properties.state = "[parameters('WorkflowState')]"
+      }
+    }
+    if ($r.type -in @('Microsoft.Web/sites', 'Microsoft.Web/serverfarms', 'Microsoft.Insights/components', 'Microsoft.Web/connections', 'Microsoft.Logic/workflows')) {
+      $values = "'ANYRUNInstaller', 'customer-v1', 'ANYRUNInstance', parameters('InstallerInstance'), 'ANYRUNConnectorKind', '$ConnectorKind'"
+      if ($r.type -in @('Microsoft.Web/sites', 'Microsoft.Web/connections', 'Microsoft.Logic/workflows')) {
+        $values += ", 'ANYRUNApplicationObjectId', parameters('InstallerAppObjectId'), 'ANYRUNCredentialKeyId', parameters('InstallerCredentialKeyId')"
+      }
+      if ($r.type -eq 'Microsoft.Web/sites') { $values += ", 'ANYRUNApplicationId', parameters('AzureClientID')" }
+      if ($r.type -eq 'Microsoft.Logic/workflows') {
+        $values += ", 'Resource', 'Microsoft Defender XDR', 'PlaybookTrigger', 'Incident', 'Custom', 'ANYRUN', 'PlaybookType', 'Enrichment'"
+      }
+      $r.tags = "[union(parameters('ResourceTags')['$($r.type)'], createObject($values))]"
+    }
+  }
+  $t | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $File -Encoding utf8NoBOM
+}
+
+function Initialize-Module([hashtable]$C) {
+  $spec = [ordered]@{'Az.Functions' = '5.0.1'
+    'Az.Accounts' = '5.5.3'
+    'Az.Resources' = '10.2.1'
+    'Az.Storage' = '9.7.2'
+    'Az.OperationalInsights' = '3.4.1'
+    'Microsoft.Graph.Authentication' = '2.40.0'
+    'Microsoft.Graph.Applications' = '2.40.0'
+  }
+  foreach ($name in $spec.Keys) {
+    $available = @(Get-Module -Name $name -ListAvailable | Where-Object Version -ge ([version]$spec[$name]) | Sort-Object Version -Descending)
+    if (-not $available.Count) {
+      if (-not $C.Options.InstallMissingModules) {
+        throw "Missing $name >= $($spec[$name]). Re-run with -InstallMissingModules to install from PSGallery in CurrentUser scope."
+      }
+      Install-Module -Name $name -MinimumVersion $spec[$name] -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+      $available = @(Get-Module -Name $name -ListAvailable | Sort-Object Version -Descending)
+    }
+    if ($name -eq 'Microsoft.Graph.Applications') {
+      $auth = Get-Module Microsoft.Graph.Authentication
+      $available = @($available | Where-Object Version -eq $auth.Version)
+      if (-not $available.Count) {
+        throw 'Graph Authentication and Applications must use the same version. Install a matching pair, then start a new PowerShell session.'
+      }
+    }
+    Import-Module -Name $name -RequiredVersion $available[0].Version -ErrorAction Stop
+  }
+}
+
+function Connect-Cloud {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'Az versions can return a transient plaintext access token; Graph requires SecureString.'
+  )]
+  param([hashtable]$C)
+  $o = $C.Options
+  $az = Get-AzContext
+  if (-not $az -or ($o.TenantId -and $az.Tenant.Id -ne $o.TenantId)) {
+    if ($o.NonInteractive) { throw 'Authenticate Azure in the requested tenant before a non-interactive installation.' }
+    $argsForLogin = @{}
+    if ($o.TenantId) { $argsForLogin.Tenant = $o.TenantId }
+    $null = Connect-AzAccount @argsForLogin
+    $az = Get-AzContext
+  }
+  if ($o.SubscriptionId) { $az = Set-AzContext -Tenant $az.Tenant.Id -SubscriptionId $o.SubscriptionId }
+  if ($az.Environment.Name -ne 'AzureCloud') { throw 'The bundled connector supports Azure public cloud only.' }
+  $o.TenantId = "$($az.Tenant.Id)"
+  $o.SubscriptionId = "$($az.Subscription.Id)"
+  $C.Azure = $az
+  Write-Host "Tenant: $($o.TenantId)  Subscription: $($o.SubscriptionId)" -ForegroundColor Cyan
+  Write-Host "Resource group: $($o.ResourceGroup)  Connectors: $($o.Connector)" -ForegroundColor Cyan
+  if (-not $o.NonInteractive -and (Read-Host 'Continue in this tenant/subscription? [y/N]') -notmatch '^(y|yes)$') { throw 'Installation cancelled.' }
+  $mg = Get-MgContext
+  if ($mg) {
+    if ($mg.TenantId -ne $o.TenantId -or $mg.AuthType -ne 'Delegated' -or
+      ($o.GraphAuthMode -eq 'AzureToken' -and $mg.Account -ne $az.Account.Id)) {
+      throw 'An incompatible Graph session is already open. Verify it, disconnect it yourself, and re-run. No existing session was replaced.'
+    }
+  } else {
+    if ($o.GraphAuthMode -eq 'Interactive') {
+      if ($o.NonInteractive) { throw 'Interactive Graph login cannot run with -NonInteractive.' }
+      $null = Connect-MgGraph -TenantId $o.TenantId -Scopes 'User.Read', 'Application.ReadWrite.All', 'AppRoleAssignment.ReadWrite.All' -ContextScope Process -NoWelcome
+    } else {
+      $token = Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com/'
+      $secure = if ($token.Token -is [SecureString]) { $token.Token }
+      else { ConvertTo-SecureString "$($token.Token)" -AsPlainText -Force }
+      $null = Connect-MgGraph -AccessToken $secure -NoWelcome
+    }
+    $C.GraphOwned = $true
+    $mg = Get-MgContext
+    if (-not $mg -or $mg.TenantId -ne $o.TenantId) {
+      throw 'Graph did not confirm the requested tenant. Re-run with -GraphAuthMode Interactive; no authentication fallback was attempted.'
+    }
+  }
+  $C.Operator = Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/me?$select=id' -OutputType PSObject
+}
+
+function Read-Arm([hashtable]$C, [string]$Path, [string]$Method = 'GET') {
+  for ($attempt = 0; $attempt -lt 4; $attempt++) {
+    $status = 0
+    $body = ''
+    $cause = ''
+    try {
+      $r = Invoke-AzRestMethod -Method $Method -Path $Path -ErrorAction Stop
+      $status = [int]$r.StatusCode
+      $body = "$($r.Content)"
+    } catch {
+      $response = Get-Field $_.Exception 'Response'
+      $status = [int](Get-Field $response 'StatusCode')
+      if (-not $status) { $status = [int](Get-Field $_.Exception 'StatusCode') }
+      if (-not $status) { $status = [int](Get-Field $_.Exception 'ResponseStatusCode') }
+      if ($_.ErrorDetails) { $body = $_.ErrorDetails.Message }
+      $cause = $_.Exception.Message
+    }
+    if ($status -eq 404) { return $null }
+    if ($status -eq 200) { return ($body | ConvertFrom-Json -AsHashtable) }
+    if ($status -in @(429, 500, 502, 503, 504) -and $attempt -lt 3) {
+      Start-Sleep -Seconds ([Math]::Min(15, [Math]::Pow(2, $attempt + 1)))
+      continue
+    }
+    $errorBody = $null
+    try {
+      $parsed = $body | ConvertFrom-Json -AsHashtable
+      $errorBody = Get-Field $parsed 'error'
+      if (-not $errorBody) { $errorBody = $parsed }
+    } catch { $errorBody = $null }
+    $code = "$(Get-Field $errorBody 'code')"
+    $message = Protect-Message $C "$(Get-Field $errorBody 'message')"
+    $failure = [InvalidOperationException]::new((Protect-Message $C "Azure read failed (HTTP $status) at $Path. $code $message $cause"))
+    $failure.Data['HttpStatus'] = $status
+    $failure.Data['ArmCode'] = $code
+    $failure.Data['ArmMessage'] = $message
+    throw $failure
+  }
+}
+
+function Test-HostFailure([Management.Automation.ErrorRecord]$Record) {
+  $data = $Record.Exception.Data
+  if ($data['HttpStatus'] -notin @(400, 500, 502, 503, 504)) { return $false }
+  if ($data['ArmCode'] -in @('HostRuntimeError', 'HostRuntimeUnavailable', 'FunctionsHostNotRunning')) { return $true }
+  $generic = $data['ArmCode'] -in @('BadRequest', 'InternalServerError', 'ServiceUnavailable', 'BadGateway', 'GatewayTimeout')
+  return $generic -and $data['ArmMessage'] -match
+  'Encountered an error \((InternalServerError|ServiceUnavailable|BadGateway|GatewayTimeout)\) from host runtime|Functions host is not running|Azure Functions runtime is unreachable'
+}
+
+function Get-ResourcePath([hashtable]$C, [string]$Type, [string]$Name) {
+  return "/subscriptions/$($C.Options.SubscriptionId)/resourceGroups/$($C.Options.ResourceGroup)/providers/$Type/$Name"
+}
+
+function Assert-Managed($Resource, [string]$Instance, [string]$Kind = '') {
+  if (-not $Resource) { return }
+  $tags = Get-Field $Resource 'tags'
+  if ((Get-Field $tags 'ANYRUNInstaller') -ne 'customer-v1' -or (Get-Field $tags 'ANYRUNInstance') -ne $Instance -or
+    ($Kind -and (Get-Field $tags 'ANYRUNConnectorKind') -ne $Kind)) {
+    throw 'A selected resource is not owned by this customer installer instance. Existing integrations are never imported; resolve the name collision or use another group.'
+  }
+}
+
+function Test-TagOption([hashtable]$C) {
+  foreach ($key in $C.Options.Tags.Keys) {
+    $value = $C.Options.Tags[$key]
+    if ("$key" -match '^ANYRUN' -or "$key" -in @('Resource', 'PlaybookTrigger', 'Custom', 'PlaybookType')) { throw "Tag '$key' is reserved for the installer." }
+    if (-not "$key" -or "$key".Length -gt 128 -or "$key" -match '[<>%&\\?/]' -or
+      $value -isnot [string] -or $value.Length -gt 256) {
+      throw 'Tags require valid names up to 128 characters and string values up to 256 characters.'
+    }
+  }
+  if ($C.Options.Tags.Count -gt 40) { throw 'At most 40 customer tags are supported, reserving room for installer metadata.' }
+}
+
+function Get-CorporateTag([hashtable]$C, $Resource, [string[]]$TemplateKeys = @()) {
+  $result = @{}
+  $existing = Get-Field $Resource 'tags'
+  if ($existing) {
+    foreach ($key in $existing.Keys) {
+      if ("$key" -notmatch '^ANYRUN' -and "$key" -notin $TemplateKeys) { $result[$key] = $existing[$key] }
+    }
+  }
+  foreach ($key in $C.Options.Tags.Keys) { $result[$key] = $C.Options.Tags[$key] }
+  if ($result.Count -gt 40) { throw 'Existing and requested corporate tags exceed the space reserved for installer metadata.' }
+  return $result
+}
+
+function Test-RequestedTag([hashtable]$C, $Resource) {
+  $actual = Get-Field $Resource 'tags'
+  foreach ($key in $C.Options.Tags.Keys) {
+    if ((Get-Field $actual "$key") -cne $C.Options.Tags[$key]) { return $true }
   }
   return $false
 }
 
-function Assert-FlexConsumptionRegion {
-  param([Parameter(Mandatory = $true)][string]$Location)
-
-  Ensure-Module "Az.Functions" -MinimumVersion "5.0.1" -RequiredCommands @("Get-AzFunctionAppAvailableLocation")
-  $locations = @(Get-AzFunctionAppAvailableLocation -PlanType FlexConsumption -SubscriptionId $SubscriptionId)
-  $requested = $Location.Replace(" ", "").ToLowerInvariant()
-  $match = $locations | Where-Object {
-    $_.Name.Replace(" ", "").ToLowerInvariant() -eq $requested
-  } | Select-Object -First 1
-  if (-not $match) {
-    throw "Azure Functions Flex Consumption is not available in region '$Location'. Choose a supported region returned by Get-AzFunctionAppAvailableLocation -PlanType FlexConsumption."
+function Get-TemplateTarget([hashtable]$P, [string]$Kind) {
+  $targets = @()
+  if ($Kind -eq 'Function') {
+    $targets += , @('Microsoft.Web/sites', $P.Function, '2024-11-01')
+    $targets += , @('Microsoft.Web/serverfarms', $P.Function, '2024-11-01')
+    $targets += , @('Microsoft.Insights/components', $P.Function, '2020-02-02')
+  } else {
+    if ($P.Kind -eq 'Sandbox') { $targets += , @('Microsoft.Web/connections', $P.Connection, '2016-06-01') }
+    $targets += , @('Microsoft.Logic/workflows', $P.Logic, '2019-05-01')
   }
-  Write-Host "  Flex Consumption is available in '$Location'." -ForegroundColor Green
+  return , $targets
 }
 
-function Assert-FunctionAppNameAvailable {
-  param([Parameter(Mandatory = $true)][string]$Name)
-
-  $existing = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.Web/sites" -Name $Name -ErrorAction SilentlyContinue
-  if ($existing) { return }
-
-  $body = @{ name = $Name; type = "Microsoft.Web/sites"; isFqdn = $false } | ConvertTo-Json -Compress
-  $path = "/subscriptions/$SubscriptionId/providers/Microsoft.Web/checknameavailability?api-version=2024-04-01"
-  $result = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method POST -Path $path -Payload $body)
-  if (-not $result.nameAvailable) {
-    throw "Function App name '$Name' is unavailable: $($result.message)"
+function Get-TemplateTag([hashtable]$C, [hashtable]$P, [string]$Kind) {
+  $result = @{}
+  foreach ($target in (Get-TemplateTarget $P $Kind)) {
+    $id = Get-ResourcePath $C $target[0] $target[1]
+    $resource = Read-Arm $C "$id`?api-version=$($target[2])"
+    Assert-Managed $resource $P.Instance $P.Kind
+    $templateKeys = if ($target[0] -eq 'Microsoft.Logic/workflows') { @('Resource', 'PlaybookTrigger', 'Custom', 'PlaybookType') } else { @() }
+    $result[$target[0]] = Get-CorporateTag $C $resource $templateKeys
   }
+  return $result
 }
 
-function Assert-StorageAccountUsable {
-  param([Parameter(Mandatory = $true)][string]$Name)
+function Get-RotationCommand([hashtable]$C, [hashtable]$P) {
+  $entryPath = Get-Field $C 'EntryPath'
+  if (-not $entryPath) { $entryPath = Join-Path $C.Root 'Deploy-ANYRUNMDEConnector.ps1' }
+  $path = $entryPath.Replace("'", "''")
+  $group = $C.Options.ResourceGroup.Replace("'", "''")
+  $command = "& '$path' -Connector $($P.Kind) -TenantId '$($C.Options.TenantId)' " +
+  "-SubscriptionId '$($C.Options.SubscriptionId)' -ResourceGroup '$group' -RotateSecret " +
+  "-GraphAuthMode $($C.Options.GraphAuthMode)"
+  if ($C.ExternalGroup) { $command += ' -UseExistingResourceGroup' }
+  if ($C.Options.NonInteractive) { $command += ' -NonInteractive -ApproveDefenderPermissions' }
+  return $command
+}
 
-  if ($Name -notmatch '^[a-z0-9]{3,24}$') {
-    throw "Storage account name '$Name' must contain 3-24 lowercase letters or numbers."
-  }
-  $account = Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $Name -ErrorAction SilentlyContinue
-  if ($account) {
-    $allowSharedKeyAccess = Get-ObjectPropertyValue -InputObject $account -Name "AllowSharedKeyAccess"
-    if ($allowSharedKeyAccess -eq $false) {
-      throw "Storage account '$Name' has AllowSharedKeyAccess=false. The current connector runtime uses account keys and cannot use this account."
+function Test-CloudPreflight([hashtable]$C, $Profiles) {
+  $o = $C.Options
+  $C.Scope = "/subscriptions/$($o.SubscriptionId)/resourceGroups/$($o.ResourceGroup)"
+  $C.GroupInstance = (Get-Profile $C Sandbox).Instance
+  $C.Group = Read-Arm $C "$($C.Scope)?api-version=2021-04-01"
+  $groupTags = Get-Field $C.Group 'tags'
+  $ownedGroup = (Get-Field $groupTags 'ANYRUNInstaller') -eq 'customer-v1' -and
+  (Get-Field $groupTags 'ANYRUNInstance') -eq $C.GroupInstance
+  $C.ExternalGroup = $C.Group -and -not $ownedGroup
+  if ($C.Group -and 'Region' -notin $C.Explicit) { $o.Region = $C.Group.location }
+  $resourceRegions = [Collections.Generic.List[string]]::new()
+  foreach ($p in $Profiles) {
+    $selectedResources = @(
+      @('Microsoft.Web/sites', $p.Function),
+      @('Microsoft.Web/serverfarms', $p.Function),
+      @('Microsoft.Insights/components', $p.Function),
+      @('Microsoft.Logic/workflows', $p.Logic),
+      @('Microsoft.Storage/storageAccounts', $p.Storage)
+    )
+    foreach ($pair in $selectedResources) {
+      $version = switch -Wildcard ($pair[0]) {
+        'Microsoft.Web/*' { '2024-11-01' }
+        'Microsoft.Storage/*' { '2023-05-01' }
+        'Microsoft.Insights/*' { '2020-02-02' }
+        default { '2019-05-01' }
+      }
+      $r = Read-Arm $C "$(Get-ResourcePath $C $pair[0] $pair[1])?api-version=$version"
+      Assert-Managed $r $p.Instance $p.Kind
+      $templateKeys = if ($pair[0] -eq 'Microsoft.Logic/workflows') { @('Resource', 'PlaybookTrigger', 'Custom', 'PlaybookType') } else { @() }
+      $null = Get-CorporateTag $C $r $templateKeys
+      $location = Get-Field $r 'location'
+      if ($location) { $resourceRegions.Add(("$location" -replace ' ', '').ToLowerInvariant()) }
     }
-    return
-  }
-  $availability = Get-AzStorageAccountNameAvailability -Name $Name
-  if (-not $availability.NameAvailable) {
-    throw "Storage account name '$Name' is unavailable: $($availability.Message)"
-  }
-}
-
-function Get-ExistingFunctionConfiguration {
-  param([Parameter(Mandatory = $true)][string]$FunctionAppName)
-
-  $site = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.Web/sites" -Name $FunctionAppName -ErrorAction SilentlyContinue
-  if (-not $site) { return $null }
-  $path = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$FunctionAppName/config/appsettings/list?api-version=2024-04-01"
-  return ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method POST -Path $path -Payload "{}")
-}
-
-function Connect-AzureSmart {
-  param([string]$RequestedTenantId, [string]$RequestedSubscriptionId)
-
-  $context = Get-AzContext -ErrorAction SilentlyContinue
-  $needsLogin = -not $context
-  if ($context -and $RequestedTenantId -and $context.Tenant.Id -ne $RequestedTenantId) { $needsLogin = $true }
-
-  if ($needsLogin) {
-    Write-Step "Signing in to Azure..."
-    if ($RequestedTenantId) { Connect-AzAccount -Tenant $RequestedTenantId | Out-Null }
-    else                    { Connect-AzAccount | Out-Null }
-  }
-
-  $context = Get-AzContext
-  $effectiveTenantId = if ($RequestedTenantId) { $RequestedTenantId } else { $context.Tenant.Id }
-
-  if ($RequestedSubscriptionId) {
-    Set-AzContext -TenantId $effectiveTenantId -SubscriptionId $RequestedSubscriptionId | Out-Null
-    return Get-AzContext
-  }
-
-  $subscriptions = @(Get-AzSubscription -TenantId $effectiveTenantId | Where-Object State -eq "Enabled" | Sort-Object Name)
-  if ($subscriptions.Count -eq 0) { throw "No enabled Azure subscriptions are available in tenant '$effectiveTenantId'." }
-
-  if ($subscriptions.Count -eq 1) {
-    Set-AzContext -TenantId $effectiveTenantId -SubscriptionId $subscriptions[0].Id | Out-Null
-    return Get-AzContext
-  }
-
-  $current = Get-AzContext
-  $currentSubscriptionId = if ($current -and $current.Subscription) { $current.Subscription.Id } else { $null }
-  if ($NonInteractive) {
-    throw "Multiple enabled subscriptions are available. Supply -SubscriptionId for a non-interactive deployment."
-  }
-  Write-Host ""
-  Write-Host "  Available subscriptions:" -ForegroundColor White
-  for ($i = 0; $i -lt $subscriptions.Count; $i++) {
-    $currentMarker = if ($currentSubscriptionId -and $subscriptions[$i].Id -eq $currentSubscriptionId) { " (current)" } else { "" }
-    Write-Host "    [$($i + 1)] $($subscriptions[$i].Name) ($($subscriptions[$i].Id))$currentMarker"
-  }
-  while ($true) {
-    $raw = Read-Host "  Subscription number"
-    $selected = 0
-    if ([int]::TryParse($raw, [ref]$selected) -and $selected -ge 1 -and $selected -le $subscriptions.Count) { break }
-    Write-Host "    Enter a number from 1 to $($subscriptions.Count)." -ForegroundColor Red
-  }
-  Set-AzContext -TenantId $effectiveTenantId -SubscriptionId $subscriptions[$selected - 1].Id | Out-Null
-  return Get-AzContext
-}
-
-function Connect-GraphSmart {
-  param([Parameter(Mandatory = $true)][string]$RequestedTenantId)
-
-  $requiredScopes = @("Application.ReadWrite.All", "AppRoleAssignment.ReadWrite.All")
-  $context = Get-MgContext -ErrorAction SilentlyContinue
-  $reuse = $false
-  if ($context -and $context.TenantId -eq $RequestedTenantId) {
-    # Access-token contexts do not always expose Scopes. In that case validate
-    # the session with a real Graph request, as the VMRay installer does.
-    $contextScopes = @($context.Scopes)
-    $missingScopes = if ($contextScopes.Count -gt 0) {
-      @($requiredScopes | Where-Object { $contextScopes -notcontains $_ })
-    } else {
-      @()
-    }
-    if ($missingScopes.Count -eq 0 -and -not $ForceGraphDeviceCode) {
-      try {
-        Get-MgApplication -Top 1 -ErrorAction Stop | Out-Null
-        $reuse = $true
-      } catch { $reuse = $false }
+    if ($p.Kind -eq 'Sandbox') {
+      Assert-Managed (Read-Arm $C "$(Get-ResourcePath $C Microsoft.Web/connections $p.Connection)?api-version=2016-06-01") $p.Instance $p.Kind
     }
   }
+  $workspacePath = Get-ResourcePath $C Microsoft.OperationalInsights/workspaces "anyrun-mde-law-$($C.GroupInstance.Substring(0,10))"
+  $workspace = Read-Arm $C "$workspacePath`?api-version=2023-09-01"
+  Assert-Managed $workspace $C.GroupInstance
+  $null = Get-CorporateTag $C $workspace
+  $regions = @($resourceRegions | Sort-Object -Unique)
+  if (-not $regions.Count -and 'Region' -notin $C.Explicit -and (Get-Field $workspace 'location')) {
+    $o.Region = "$($workspace.location)"
+  }
+  if ($regions.Count -gt 1) { throw 'Selected managed resources span multiple regions. Review the installation before updating it.' }
+  if ($regions.Count -eq 1) {
+    if ('Region' -in $C.Explicit -and $o.Region.ToLowerInvariant() -ne $regions[0]) {
+      throw 'Region differs from existing managed resources; resources cannot be moved by re-running the installer.'
+    }
+    $o.Region = $regions[0]
+  }
+  $locations = @(Get-AzFunctionAppAvailableLocation -PlanType FlexConsumption -SubscriptionId $o.SubscriptionId)
+  if (-not @($locations | Where-Object { ("$($_.Name)" -replace ' ', '').ToLowerInvariant() -eq $o.Region.ToLowerInvariant() }).Count) {
+    throw "Flex Consumption is unavailable in '$($o.Region)'. Choose a supported region."
+  }
+  if ($C.ExternalGroup -and -not $o.UseExistingResourceGroup) {
+    if ($o.NonInteractive) { throw 'The resource group is not owned by this installer. Explicitly approve placement with -UseExistingResourceGroup.' }
+    if ((Read-Host "Use existing group $($C.Scope) in resource region $($o.Region), without changing its tags? [y/N]") -notmatch '^(y|yes)$') {
+      throw 'Existing resource group placement was declined.'
+    }
+  }
+}
 
-  if ($reuse) {
-    Write-Host "  Reusing Microsoft Graph session." -ForegroundColor Green
-    return
+function Initialize-AzureResource([hashtable]$C) {
+  if (-not $C.Group) {
+    $groupTags = (Get-CorporateTag $C $null) + @{ANYRUNInstaller = 'customer-v1'
+      ANYRUNInstance = $C.GroupInstance
+    }
+    $C.Group = New-AzResourceGroup -Name $C.Options.ResourceGroup -Location $C.Options.Region -Tag $groupTags
+  }
+  foreach ($namespace in @('Microsoft.Web', 'Microsoft.Storage', 'Microsoft.Insights', 'Microsoft.OperationalInsights', 'Microsoft.Logic')) {
+    $provider = Get-AzResourceProvider -ProviderNamespace $namespace
+    if ($provider.RegistrationState -ne 'Registered') {
+      $null = Register-AzResourceProvider -ProviderNamespace $namespace
+      for ($n = 0; $n -lt 30; $n++) {
+        if ((Get-AzResourceProvider -ProviderNamespace $namespace).RegistrationState -eq 'Registered') { break }
+        if ($n -eq 29) { throw "Provider $namespace is still registering. Re-run later." }
+        Start-Sleep -Seconds 10
+      }
+    }
+  }
+}
+
+function Get-Storage {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'Azure returns plaintext Shared Key; secure ARM parameters require SecureString. Values are redacted.'
+  )]
+  param([hashtable]$C, [hashtable]$P)
+  $resource = Read-Arm $C "$(Get-ResourcePath $C Microsoft.Storage/storageAccounts $P.Storage)?api-version=2023-05-01"
+  Assert-Managed $resource $P.Instance $P.Kind
+  $account = if ($resource) { Get-AzStorageAccount -ResourceGroupName $C.Options.ResourceGroup -Name $P.Storage -ErrorAction Stop }
+  else { $null }
+  if (-not $resource) {
+    $available = Get-AzStorageAccountNameAvailability -Name $P.Storage
+    if (-not $available.NameAvailable) { throw 'The generated Storage account name is unavailable. Choose a different resource group name.' }
+    $account = New-AzStorageAccount -ResourceGroupName $C.Options.ResourceGroup -Name $P.Storage -Location $C.Options.Region -SkuName Standard_LRS -Kind StorageV2 `
+      -EnableHttpsTrafficOnly $true -MinimumTlsVersion TLS1_2 -AllowBlobPublicAccess $false `
+      -Tag ((Get-CorporateTag $C $null) + @{ANYRUNInstaller = 'customer-v1'
+        ANYRUNInstance = $P.Instance
+        ANYRUNConnectorKind = $P.Kind
+      })
+  }
+  Assert-Managed $account $P.Instance $P.Kind
+  if ((Get-Field $account 'AllowSharedKeyAccess') -eq $false -or (Get-Field $account 'PublicNetworkAccess') -eq 'Disabled' -or
+    (Get-Field (Get-Field $account 'NetworkRuleSet') 'DefaultAction') -eq 'Deny') {
+    throw 'Storage policy/network restrictions are incompatible with this deployment path. They will not be opened or disabled.'
+  }
+  $key = (Get-AzStorageAccountKey -ResourceGroupName $C.Options.ResourceGroup -Name $P.Storage)[0].Value
+  $C.Secrets.Add($key)
+  $connection = "DefaultEndpointsProtocol=https;AccountName=$($P.Storage);AccountKey=$key;EndpointSuffix=core.windows.net"
+  $C.Secrets.Add($connection)
+  return @{Account = $account
+    Name = $P.Storage
+    Key = (ConvertTo-SecureString $key -AsPlainText -Force)
+    Connection = (ConvertTo-SecureString $connection -AsPlainText -Force)
+    Context = (New-AzStorageContext -ConnectionString $connection)
+  }
+}
+
+function Get-PrivateContainer([hashtable]$C, [hashtable]$Storage, [string]$Name) {
+  $options = [Azure.Storage.Blobs.BlobClientOptions]::new()
+  $options.Retry.NetworkTimeout = [TimeSpan]::FromSeconds(10)
+  $options.Retry.MaxRetries = 1
+  $service = [Azure.Storage.Blobs.BlobServiceClient]::new((Get-PlainSecret $C $Storage.Connection), $options)
+  $container = $service.GetBlobContainerClient($Name)
+  $cancel = [Threading.CancellationToken]::None
+  $null = $container.CreateIfNotExists([Azure.Storage.Blobs.Models.PublicAccessType]::None, $null, $null, $cancel)
+  if ($container.GetProperties($null, $cancel).Value.PublicAccess -ne [Azure.Storage.Blobs.Models.PublicAccessType]::None) {
+    throw 'Installer containers must be private. Existing access policy will not be changed.'
+  }
+  return $container
+}
+
+function Get-GraphFailure([Management.Automation.ErrorRecord]$Record) {
+  $exception = $Record.Exception
+  $status = Get-Field $exception 'ResponseStatusCode'
+  if (-not $status) { $status = Get-Field (Get-Field $exception 'Response') 'StatusCode' }
+  $errorBody = $null
+  if ($Record.ErrorDetails) {
+    try { $errorBody = Get-Field ($Record.ErrorDetails.Message | ConvertFrom-Json -AsHashtable) 'error' }
+    catch { $errorBody = $null }
+  }
+  $code = Get-Field $errorBody 'code'
+  if (-not $code) { $code = Get-Field (Get-Field $exception 'Error') 'Code' }
+  if (-not $code) { $code = Get-Field $exception 'Code' }
+  if (-not $code -and $exception.Message -match '\[(Request_ResourceNotFound|ResourceNotFound|Request_BadRequest)\]') { $code = $Matches[1] }
+  $details = @(Get-Field $errorBody 'details')
+  $missing = $code -in @('Request_ResourceNotFound', 'ResourceNotFound')
+  $backing = @($details | Where-Object { (Get-Field $_ 'code') -eq 'NoBackingApplicationObject' }).Count -gt 0
+  $backing = $backing -or $code -eq 'NoBackingApplicationObject'
+  $backing = $backing -or ($code -eq 'Request_BadRequest' -and $exception.Message -match 'does not reference a valid application object|NoBackingApplicationObject')
+  return @{Status = [int]$status
+    Missing = $missing
+    MissingBackingApp = $backing
+  }
+}
+
+function Invoke-GraphPropagation([hashtable]$C, [scriptblock]$Action, [string]$Operation) {
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $spent = 0
+  $attempt = 0
+  try {
+    while ($true) {
+
+      try { return (& $Action) }
+      catch {
+        $failure = Get-GraphFailure $_
+        $recognized = $failure.Missing -or ($Operation -eq 'ServicePrincipal' -and $failure.MissingBackingApp)
+        $delay = [Math]::Min(20, [Math]::Pow(2, ++$attempt))
+        $remaining = 90 - [Math]::Max($spent, $clock.Elapsed.TotalSeconds)
+        if (-not $recognized -or $failure.Status -notin @(0, 400, 404) -or $remaining -lt $delay) { throw }
+        Write-Host "$Operation`: waiting for Graph object propagation..." -ForegroundColor DarkGray
+        Start-Sleep -Seconds $delay
+        $spent += $delay
+      }
+    }
+  } finally { $clock.Stop() }
+}
+
+function Write-ConsentInstruction([hashtable]$C, [hashtable]$P, $App) {
+  Write-Warning "Admin consent is required or not visible for $($P.Kind). No runtime secret was created."
+  Write-Host "Tenant: $($C.Options.TenantId); application: $($P.AppName)" -ForegroundColor Cyan
+  Write-Host "ClientId: $($App.AppId); ObjectId: $($App.Id)" -ForegroundColor Cyan
+  Write-Host "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/$($App.AppId)/isMSAApp~/false" -ForegroundColor Cyan
+  Write-Host 'Verify the tenant, then App registrations > All applications > select this ClientId > API permissions > Grant admin consent.'
+  Write-Host 'If the portal link changes, use https://entra.microsoft.com and the navigation above. Then re-run the same command.'
+}
+
+function Get-CredentialInventory($Identity) {
+  $credentials = @($Identity.App.PasswordCredentials | Where-Object { $_ })
+  if ($Identity.NewCredential) { $credentials += $Identity.CurrentCredential }
+  $credentials = @($credentials | Sort-Object KeyId -Unique)
+  $current = @($credentials | Where-Object { "$($_.KeyId)" -eq $Identity.KeyId })
+  if ($current.Count -ne 1 -or -not $current[0].EndDateTime) { throw 'Current credential expiry metadata is missing or ambiguous.' }
+  $expires = [DateTimeOffset]$current[0].EndDateTime
+  $days = [Math]::Floor(($expires - [DateTimeOffset]::UtcNow).TotalDays)
+  Write-Host "Current credential: $($Identity.KeyId); expires $($expires.UtcDateTime.ToString('u')); remaining days: $days."
+  if ($days -lt 30) {
+    Write-Warning "The current password expires in $days days. Plan -RotateSecret and verified consumer cutover."
+  }
+  $previous = @($credentials | Where-Object { "$($_.KeyId)" -ne $Identity.KeyId } | ForEach-Object {
+      $appId = "$($Identity.App.Id)".Replace("'", "''")
+      $keyId = "$($_.KeyId)".Replace("'", "''")
+      @{KeyId = "$($_.KeyId)"
+        ExpiresUTC = ([DateTimeOffset]$_.EndDateTime).UtcDateTime.ToString('u')
+        RevokeCommand = "Remove-MgApplicationPassword -ApplicationId '$appId' -KeyId '$keyId' -Confirm"
+      }
+    })
+  return @{ExpiresUTC = $expires.UtcDateTime.ToString('u')
+    Expired = $expires -le [DateTimeOffset]::UtcNow
+    Previous = $previous
+  }
+}
+
+function Get-Identity([hashtable]$C, [hashtable]$P, [hashtable]$Storage) {
+  $defender = Get-MgServicePrincipal -Filter "appId eq 'fc780465-2017-40d4-a0c5-307022471b92'" -Property Id, AppRoles | Select-Object -First 1
+  if (-not $defender) { throw 'WindowsDefenderATP service principal is unavailable in this tenant.' }
+  $roles = @()
+  foreach ($name in $P.Roles) {
+    $role = @($defender.AppRoles | Where-Object { $_.Value -eq $name -and $_.IsEnabled -and 'Application' -in $_.AllowedMemberTypes })
+    if ($role.Count -ne 1) {
+      throw "Required Defender application role '$name' is unavailable. No substitute permission will be granted."
+    }
+    $roles += $role[0]
+  }
+  $recorded = Get-Field $Storage.Account.Tags 'ANYRUNApplicationObjectId'
+  $properties = @('Id', 'AppId', 'DisplayName', 'Tags', 'SignInAudience', 'RequiredResourceAccess', 'PasswordCredentials', 'KeyCredentials')
+  if ($recorded) {
+    try {
+      $candidates = @(Invoke-GraphPropagation $C {
+          Get-MgApplication -ApplicationId $recorded -Property $properties
+        } RecordedApplication)
+    } catch {
+      if (-not (Get-GraphFailure $_).Missing -and (Get-GraphFailure $_).Status -ne 404) { throw }
+      throw ("Recorded application ObjectId '$recorded' is unavailable in tenant '$($C.Options.TenantId)'. " +
+        'Restore the original App Registration or use a separately reviewed identity migration. ' +
+        'Do not delete Storage metadata or substitute a same-name application.')
+    }
+    if (-not $candidates.Count) {
+      throw "Recorded application ObjectId '$recorded' is missing. Restore the original App Registration or review identity migration; no replacement was created."
+    }
+  } else {
+    $candidates = @(Get-MgApplication -Filter "displayName eq '$($P.AppName)'" -All -Property $properties)
+  }
+  if ($candidates.Count -gt 1) {
+    throw 'More than one application matches this installer instance. Do not select one automatically; resolve the duplicate installation first.'
+  }
+  $required = @(@{ResourceAppId = 'fc780465-2017-40d4-a0c5-307022471b92'
+      ResourceAccess = @($roles | ForEach-Object { @{Id = $_.Id
+            Type = 'Role'
+          } })
+    })
+
+  if (-not $candidates.Count) {
+    $app = New-MgApplication -BodyParameter @{DisplayName = $P.AppName
+      SignInAudience = 'AzureADMyOrg'
+      Tags = @($P.Tag)
+      RequiredResourceAccess = $required
+      'owners@odata.bind' = @("https://graph.microsoft.com/v1.0/users/$($C.Operator.id)")
+    }
+    if (-not $app.Id -or -not $app.AppId) { throw 'Graph creation returned incomplete application identifiers; no further changes are safe.' }
+
+    $null = Update-AzTag -ResourceId $Storage.Account.Id -Operation Merge -Tag @{ANYRUNApplicationObjectId = "$($app.Id)"
+      ANYRUNApplicationId = "$($app.AppId)"
+    }
+  } else { $app = $candidates[0] }
+  $expectedIds = @($roles | ForEach-Object { "$($_.Id)" })
+  $access = @($app.RequiredResourceAccess)
+  $declared = @($access | ForEach-Object { $_.ResourceAccess })
+  if ($app.SignInAudience -ne 'AzureADMyOrg' -or $P.Tag -notin @($app.Tags) -or $access.Count -ne 1 -or
+    $access[0].ResourceAppId -ne 'fc780465-2017-40d4-a0c5-307022471b92' -or @($declared | ForEach-Object { "$($_.Id)" } | Sort-Object -Unique).Count -ne $expectedIds.Count -or
+    @($declared | Where-Object { $_.Type -ne 'Role' -or "$($_.Id)" -notin $expectedIds }).Count) {
+    throw 'Application marker/type/declared roles differ from this connector profile. No existing application will be repurposed or have its permissions expanded.'
+  }
+  $federated = @(Invoke-GraphPropagation $C {
+      Get-MgApplicationFederatedIdentityCredential -ApplicationId $app.Id -All
+    } FederatedCredentials)
+  if (@($app.KeyCredentials | Where-Object { $_ }).Count -or @($federated | Where-Object { $_ }).Count -or
+    @($app.PasswordCredentials | Where-Object { $_.DisplayName -notlike "$($P.Tag):password:*" }).Count) {
+    throw 'The managed application has an unrecognized authentication path. Review it independently before continuing.'
   }
 
-  if ($context) { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null }
+  if ($candidates.Count -and ((Get-Field $Storage.Account.Tags 'ANYRUNApplicationObjectId') -ne $app.Id -or
+      (Get-Field $Storage.Account.Tags 'ANYRUNApplicationId') -ne $app.AppId)) {
+    $null = Update-AzTag -ResourceId $Storage.Account.Id -Operation Merge -Tag @{ANYRUNApplicationObjectId = "$($app.Id)"
+      ANYRUNApplicationId = "$($app.AppId)"
+    }
+  }
+  $sp = Invoke-GraphPropagation $C {
+    $existing = Get-MgServicePrincipal -Filter "appId eq '$($app.AppId)'" -Property Id, PasswordCredentials, KeyCredentials | Select-Object -First 1
+    if ($existing) { return $existing }
+    New-MgServicePrincipal -AppId $app.AppId
+  } ServicePrincipal
+  if (@($sp.PasswordCredentials | Where-Object { $_ }).Count -or @($sp.KeyCredentials | Where-Object { $_ }).Count) {
+    throw 'Service principal has an unmanaged credential. Installation stopped.'
+  }
+  $assignments = @(Invoke-GraphPropagation $C { Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -All } RoleInventory)
+  if (@($assignments | Where-Object { "$($_.ResourceId)" -ne "$($defender.Id)" -or "$($_.AppRoleId)" -notin $expectedIds }).Count) {
+    throw 'Application has effective permissions outside this connector profile. Installation stopped before a runtime secret was issued.'
+  }
+  foreach ($role in $roles) {
+    if ("$($role.Id)" -in @($assignments | ForEach-Object { "$($_.AppRoleId)" })) { continue }
 
-  if (-not $ForceGraphDeviceCode) {
-    $azureContext = Get-AzContext -ErrorAction SilentlyContinue
-    if ($azureContext -and $azureContext.Tenant.Id -eq $RequestedTenantId) {
-      try {
-        Write-Step "Reusing the Azure session for Microsoft Graph..."
-        $tokenResult = Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com" -ErrorAction Stop
-        $graphToken = if ($tokenResult.Token -is [SecureString]) {
-          $tokenResult.Token
-        } else {
-          ConvertTo-SecureValue -Value $tokenResult.Token
+    try {
+      $null = Invoke-GraphPropagation $C {
+        $visible = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -All)
+        if (@($visible | Where-Object { $_.ResourceId -eq $defender.Id -and $_.AppRoleId -eq $role.Id }).Count) { return }
+        New-MgServicePrincipalAppRoleAssignedTo -ServicePrincipalId $defender.Id -BodyParameter @{principalId = $sp.Id
+          resourceId = $defender.Id
+          appRoleId = $role.Id
         }
-        Connect-MgGraph -AccessToken $graphToken -NoWelcome -ErrorAction Stop | Out-Null
-        $script:GraphSessionOwned = $true
-        Get-MgApplication -Top 1 -ErrorAction Stop | Out-Null
-        Write-Host "  Connected to Microsoft Graph through the existing Azure session." -ForegroundColor Green
+      } RoleAssignment
+    } catch {
+      $message = $_.Exception.Message
+      if ($message -notmatch '403|Authorization_RequestDenied|Insufficient privileges') { throw }
+      Write-ConsentInstruction $C $P $app
+      return @{App = $app
+        ServicePrincipal = $sp
+        PendingConsent = $true
+      }
+    }
+  }
+  for ($attempt = 0; $attempt -lt 12; $attempt++) {
+    $granted = @(Invoke-GraphPropagation $C { Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -All } RoleInventory)
+    if (@($granted | Where-Object { "$($_.ResourceId)" -ne "$($defender.Id)" -or "$($_.AppRoleId)" -notin $expectedIds }).Count) {
+      throw 'Permissions changed during consent. Installation stopped.'
+    }
+    if (-not @($expectedIds | Where-Object { $_ -notin @($granted | ForEach-Object { "$($_.AppRoleId)" }) }).Count) {
+      return @{App = $app
+        ServicePrincipal = $sp
+        PendingConsent = $false
+      }
+    }
+    if ($attempt -lt 11) { Start-Sleep -Seconds 10 }
+  }
+  Write-ConsentInstruction $C $P $app
+  return @{App = $app
+    ServicePrincipal = $sp
+    PendingConsent = $true
+  }
+}
+
+function Read-FunctionSetting([hashtable]$C, [hashtable]$P, $Site) {
+  if (-not $Site) { return @{} }
+  $body = Read-Arm $C "$(Get-ResourcePath $C Microsoft.Web/sites $P.Function)/config/appsettings/list?api-version=2024-04-01" POST
+  if (-not $body) { return @{} }
+  $settings = $body.properties
+  foreach ($key in $settings.Keys) {
+    if ($key -match '(?i)secret|key|connectionstring') { $C.Secrets.Add("$($settings[$key])") }
+  }
+  return $settings
+}
+
+function Test-Credential([hashtable]$C, [hashtable]$P, $Identity, [SecureString]$Secret) {
+  $plain = Get-PlainSecret $C $Secret
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $spent = 0
+  $attempt = 0
+  try {
+    do {
+      $attempt++
+      $stage = 'OAuth'
+      $timeout = [Math]::Max(1, [Math]::Min(30, [int][Math]::Ceiling(300 - [Math]::Max($spent, $clock.Elapsed.TotalSeconds))))
+      try {
+        $token = Invoke-RestMethod -Method POST -Uri "https://login.microsoftonline.com/$($C.Options.TenantId)/oauth2/v2.0/token" -ContentType 'application/x-www-form-urlencoded' `
+          -TimeoutSec $timeout -Body @{client_id = $Identity.App.AppId
+          client_secret = $plain
+          grant_type = 'client_credentials'
+          scope = 'https://api.securitycenter.microsoft.com/.default'
+        }
+        if (-not $token.access_token -or $token.token_type -ne 'Bearer') { throw 'OAuth did not return a bearer token.' }
+        $C.Secrets.Add($token.access_token)
+        $stage = 'Defender'
+        $endpoint = if ($P.Kind -eq 'Sandbox') { 'machines' }
+        else { 'indicators' }
+        $timeout = [Math]::Max(1, [Math]::Min(30, [int][Math]::Ceiling(300 - [Math]::Max($spent, $clock.Elapsed.TotalSeconds))))
+        $null = Invoke-RestMethod -Method GET -Uri "https://api.securitycenter.microsoft.com/api/$endpoint`?`$top=1" -TimeoutSec $timeout -Headers @{Authorization = "Bearer $($token.access_token)" }
         return
       } catch {
-        Write-Host "  Azure-session Graph authentication was unavailable: $($_.Exception.Message)" -ForegroundColor Yellow
-      }
-    }
-  }
-
-  Write-Step "Signing in to Microsoft Graph with application-management scopes..."
-  Write-Host "  Open https://microsoft.com/devicelogin and enter the device code shown below." -ForegroundColor Yellow
-  # Browser-based Connect-MgGraph can wait indefinitely in Azure Cloud Shell.
-  # Device code is the reliable fallback when the Azure token cannot be reused.
-  Connect-MgGraph -TenantId $RequestedTenantId -Scopes $requiredScopes -UseDeviceCode -NoWelcome | Out-Null
-  $script:GraphSessionOwned = $true
-}
-
-function Get-StableSuffix {
-  param([Parameter(Mandatory = $true)][string]$InputText, [int]$Length = 8)
-  $sha = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($InputText)
-    $hex = [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
-    return $hex.Substring(0, $Length)
-  } finally {
-    $sha.Dispose()
-  }
-}
-
-function Get-ArmGuid {
-  param([Parameter(Mandatory = $true)][string[]]$Values)
-
-  # ARM guid() is RFC 4122 v5 with this fixed namespace and '-' joined arguments.
-  $namespace = [Guid]"11fb06fb-712d-4ddd-98c7-e71bbd588830"
-  $namespaceBytes = $namespace.ToByteArray()
-  [Array]::Reverse($namespaceBytes, 0, 4)
-  [Array]::Reverse($namespaceBytes, 4, 2)
-  [Array]::Reverse($namespaceBytes, 6, 2)
-  $nameBytes = [Text.Encoding]::UTF8.GetBytes(($Values -join '-'))
-  $inputBytes = [byte[]]::new($namespaceBytes.Length + $nameBytes.Length)
-  [Array]::Copy($namespaceBytes, 0, $inputBytes, 0, $namespaceBytes.Length)
-  [Array]::Copy($nameBytes, 0, $inputBytes, $namespaceBytes.Length, $nameBytes.Length)
-  $sha1 = [Security.Cryptography.SHA1]::Create()
-  try { $hash = $sha1.ComputeHash($inputBytes) } finally { $sha1.Dispose() }
-  $guidBytes = [byte[]]$hash[0..15]
-  $guidBytes[6] = [byte](($guidBytes[6] -band 0x0f) -bor 0x50)
-  $guidBytes[8] = [byte](($guidBytes[8] -band 0x3f) -bor 0x80)
-  [Array]::Reverse($guidBytes, 0, 4)
-  [Array]::Reverse($guidBytes, 4, 2)
-  [Array]::Reverse($guidBytes, 6, 2)
-  return ([Guid]::new($guidBytes)).ToString('D')
-}
-
-function Get-ResourceServicePrincipal {
-  param([Parameter(Mandatory = $true)][string]$ResourceAppId, [string]$FriendlyName)
-  $sp = Get-MgServicePrincipal -Filter "appId eq '$ResourceAppId'" -Property Id,AppId,DisplayName,AppRoles | Select-Object -First 1
-  if (-not $sp) {
-    Write-Host "  Creating the '$FriendlyName' service principal in this tenant..." -ForegroundColor Yellow
-    $sp = New-MgServicePrincipal -AppId $ResourceAppId
-    $sp = Get-MgServicePrincipal -ServicePrincipalId $sp.Id -Property Id,AppId,DisplayName,AppRoles
-  }
-  return $sp
-}
-
-function Get-OrCreateClientServicePrincipal {
-  param([Parameter(Mandatory = $true)][string]$ApplicationId)
-
-  for ($attempt = 1; $attempt -le 6; $attempt++) {
-    $servicePrincipal = Get-MgServicePrincipal -Filter "appId eq '$ApplicationId'" -Property Id,AppId -ErrorAction SilentlyContinue |
-      Select-Object -First 1
-    if ($servicePrincipal) { return $servicePrincipal }
-
-    try {
-      return New-MgServicePrincipal -AppId $ApplicationId
-    } catch {
-      if ($attempt -eq 6) { throw }
-      Write-Host "  App Registration is still replicating; retrying service-principal creation in 5 seconds..." -ForegroundColor DarkGray
-      Start-Sleep -Seconds 5
-    }
-  }
-}
-
-function Resolve-AppRoles {
-  param(
-    [Parameter(Mandatory = $true)]$ResourceServicePrincipal,
-    [Parameter(Mandatory = $true)][string[]]$RoleValues
-  )
-
-  $resolved = @()
-  foreach ($value in $RoleValues) {
-    $role = $ResourceServicePrincipal.AppRoles |
-      Where-Object { $_.Value -eq $value -and $_.IsEnabled } |
-      Select-Object -First 1
-    if (-not $role) { throw "WindowsDefenderATP application permission '$value' was not found in this tenant." }
-    $resolved += [pscustomobject]@{ Value = $value; Id = $role.Id }
-  }
-  return $resolved
-}
-
-function Merge-RequiredResourceAccess {
-  param(
-    [Parameter(Mandatory = $true)]$Application,
-    [Parameter(Mandatory = $true)]$ResolvedRoles
-  )
-
-  $merged = @()
-  foreach ($entry in @($Application.RequiredResourceAccess)) {
-    if ($entry.ResourceAppId -eq $script:WindowsDefenderAtpAppId) {
-      continue
-    }
-
-    $preservedAccess = @($entry.ResourceAccess | ForEach-Object { @{ Id = $_.Id; Type = $_.Type } })
-    $merged += @{ ResourceAppId = $entry.ResourceAppId; ResourceAccess = $preservedAccess }
-  }
-
-  $merged += @{
-    ResourceAppId = $script:WindowsDefenderAtpAppId
-    ResourceAccess = @($ResolvedRoles | ForEach-Object { @{ Id = $_.Id; Type = "Role" } })
-  }
-  return $merged
-}
-
-function Test-AppRoleConsent {
-  param([string]$ClientServicePrincipalId, $RequiredRoles)
-  $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $ClientServicePrincipalId -All -ErrorAction SilentlyContinue)
-  $granted = @($assignments | ForEach-Object { $_.AppRoleId.ToString() })
-  foreach ($role in $RequiredRoles) {
-    if ($granted -notcontains $role.Id.ToString()) { return $false }
-  }
-  return $true
-}
-
-function Grant-AppRoleConsent {
-  param(
-    [string]$ClientServicePrincipalId,
-    [string]$ResourceServicePrincipalId,
-    $RequiredRoles
-  )
-
-  $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $ClientServicePrincipalId -All -ErrorAction SilentlyContinue)
-  $granted = @($assignments | ForEach-Object { $_.AppRoleId.ToString() })
-  $allSucceeded = $true
-
-  foreach ($role in $RequiredRoles) {
-    if ($granted -contains $role.Id.ToString()) {
-      Write-Host "    = $($role.Value) (already granted)" -ForegroundColor DarkGray
-      continue
-    }
-    try {
-      $body = @{
-        principalId = $ClientServicePrincipalId
-        resourceId  = $ResourceServicePrincipalId
-        appRoleId   = $role.Id
-      }
-      New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $ClientServicePrincipalId -BodyParameter $body | Out-Null
-      Write-Host "    + $($role.Value)" -ForegroundColor Green
-    } catch {
-      Write-Host "    ! $($role.Value): $($_.Exception.Message)" -ForegroundColor Yellow
-      $allSucceeded = $false
-      if ("$($_.Exception.Message)" -match '403|Authorization_RequestDenied|Insufficient privileges') {
-        Write-Host "    Remaining permissions were not attempted because this account cannot grant admin consent." -ForegroundColor Yellow
-        break
-      }
-    }
-  }
-  return $allSucceeded
-}
-
-function Remove-ExcessDefenderConsent {
-  param(
-    [Parameter(Mandatory = $true)][string]$ClientServicePrincipalId,
-    [Parameter(Mandatory = $true)][string]$ResourceServicePrincipalId,
-    [Parameter(Mandatory = $true)]$RequiredRoles
-  )
-
-  $requiredIds = @($RequiredRoles | ForEach-Object { $_.Id.ToString() })
-  $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $ClientServicePrincipalId -All)
-  foreach ($assignment in $assignments) {
-    if ($assignment.ResourceId.ToString() -ne $ResourceServicePrincipalId) { continue }
-    if ($requiredIds -contains $assignment.AppRoleId.ToString()) { continue }
-    Remove-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $ClientServicePrincipalId `
-      -AppRoleAssignmentId $assignment.Id -Confirm:$false
-    Write-Host "    - Removed unused WindowsDefenderATP permission assignment $($assignment.AppRoleId)." -ForegroundColor DarkGray
-  }
-}
-
-function Wait-ForConsent {
-  param([string]$ClientServicePrincipalId, $RequiredRoles, [int]$Attempts = 6)
-  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-    if (Test-AppRoleConsent -ClientServicePrincipalId $ClientServicePrincipalId -RequiredRoles $RequiredRoles) { return $true }
-    if ($attempt -lt $Attempts) {
-      Write-Host "  Consent is still propagating ($attempt/$Attempts); waiting 15 seconds..." -ForegroundColor DarkGray
-      Start-Sleep -Seconds 15
-    }
-  }
-  return $false
-}
-
-function New-ConnectorSecret {
-  param([Parameter(Mandatory = $true)]$Application, [string]$Label)
-  $passwordCredential = @{
-    DisplayName = "ANY.RUN $Label deployment secret $(Get-Date -Format 'yyyy-MM-dd')"
-    EndDateTime = (Get-Date).AddMonths($SecretLifetimeMonths)
-  }
-  $result = Add-MgApplicationPassword -ApplicationId $Application.Id -BodyParameter @{ PasswordCredential = $passwordCredential }
-  Write-Host "  Created a client secret expiring $($result.EndDateTime.ToString('yyyy-MM-dd'))." -ForegroundColor Green
-  return [pscustomobject]@{
-    Secret = ConvertTo-SecureValue -Value $result.SecretText
-    KeyId  = $result.KeyId
-  }
-}
-
-function Test-DefenderCredential {
-  param(
-    [Parameter(Mandatory = $true)][string]$ClientId,
-    [Parameter(Mandatory = $true)][SecureString]$ClientSecret,
-    [Parameter(Mandatory = $true)][string[]]$RequiredRoleValues,
-    [Parameter(Mandatory = $true)][string]$Label
-  )
-
-  Write-Step "Validating the $Label client secret and effective Defender permissions..."
-  $plainSecret = ConvertFrom-SecureValue -Value $ClientSecret
-  $lastFailure = $null
-  try {
-    for ($attempt = 1; $attempt -le 5; $attempt++) {
-      $token = $null
-      try {
-        $token = Invoke-RestMethod -Method POST `
-          -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" `
-          -ContentType "application/x-www-form-urlencoded" `
-          -Body @{
-            client_id     = $ClientId
-            client_secret = $plainSecret
-            grant_type    = "client_credentials"
-            scope         = "https://api.securitycenter.microsoft.com/.default"
+        $response = Get-Field $_.Exception 'Response'
+        $status = [int](Get-Field $response 'StatusCode')
+        $details = Get-Field $_ 'ErrorDetails'
+        $oauthError = $null
+        if ($details) {
+          try { $oauthError = $details.Message | ConvertFrom-Json -AsHashtable }
+          catch {
+            # Non-JSON responses are classified by HTTP status only.
+            $oauthError = $null
           }
-      } catch {
-        $lastFailure = "$($_.Exception.Message)"
-      }
-
-      if ($token) {
-        $payloadPart = $token.access_token.Split('.')[1].Replace('-', '+').Replace('_', '/')
-        switch ($payloadPart.Length % 4) {
-          2 { $payloadPart += "==" }
-          3 { $payloadPart += "=" }
         }
-        $claims = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payloadPart)) | ConvertFrom-Json
-        $tokenRoles = @(Get-ObjectPropertyValue -InputObject $claims -Name "roles")
-        $missingRoles = @($RequiredRoleValues | Where-Object { $tokenRoles -notcontains $_ })
-        if ($missingRoles.Count -eq 0) {
-          Write-Host "  $Label credentials and Defender roles are valid." -ForegroundColor Green
-          return
+        if ($stage -eq 'OAuth' -and 7000222 -in @(Get-Field $oauthError 'error_codes')) {
+          throw ("Entra reports an expired client secret (AADSTS7000222), KeyId '$($Identity.KeyId)'. " +
+            "Review the credential and re-run: $(Get-RotationCommand $C $P)")
         }
-        $lastFailure = "token is missing required Defender roles: $($missingRoles -join ', ')"
+        $retry = $status -in @(429, 500, 502, 503, 504) -or ($stage -eq 'Defender' -and $status -in @(401, 403)) -or
+        ($Identity.NewCredential -and $stage -eq 'OAuth' -and (Get-Field $oauthError 'error') -eq 'invalid_client' -and
+        (-not (Get-Field $oauthError 'error_codes') -or 7000215 -in @(Get-Field $oauthError 'error_codes')))
+        $remaining = 300 - [Math]::Max($spent, $clock.Elapsed.TotalSeconds)
+        $delay = [Math]::Min(20, 5 * $attempt)
+        if (-not $retry -or $remaining -le $delay) { throw }
+        Write-Host "$($P.Kind): waiting for credential/consent propagation ($attempt)..." -ForegroundColor DarkGray
+        Start-Sleep -Seconds $delay
+        $spent += $delay
       }
-
-      if ($attempt -lt 5) {
-        $delaySeconds = 10 * $attempt
-        Write-Host "  Defender credential or roles are still propagating ($attempt/5); waiting $delaySeconds seconds..." -ForegroundColor DarkGray
-        Start-Sleep -Seconds $delaySeconds
-      }
-    }
+    } while ([Math]::Max($spent, $clock.Elapsed.TotalSeconds) -lt 300)
+    throw 'Credential readiness timed out. Re-run after consent has propagated.'
   } finally {
-    $plainSecret = $null
-  }
-  throw "$Label credential validation failed after five attempts: $lastFailure. If the stored secret is expired, re-run with -RotateClientSecret."
-}
-
-function Remove-OldConnectorSecrets {
-  param(
-    [Parameter(Mandatory = $true)][string]$ApplicationObjectId,
-    [Parameter(Mandatory = $true)][Guid]$CurrentKeyId,
-    [Parameter(Mandatory = $true)][string]$Label
-  )
-
-  $application = Get-MgApplication -ApplicationId $ApplicationObjectId -Property PasswordCredentials
-  $prefix = "ANY.RUN $Label deployment secret "
-  foreach ($credential in @($application.PasswordCredentials)) {
-    if ($credential.KeyId -eq $CurrentKeyId -or [string]::IsNullOrWhiteSpace($credential.DisplayName) -or -not $credential.DisplayName.StartsWith($prefix)) { continue }
-    Remove-MgApplicationPassword -ApplicationId $ApplicationObjectId -KeyId $credential.KeyId -Confirm:$false
-    Write-Host "  Removed superseded deployment secret '$($credential.DisplayName)'." -ForegroundColor DarkGray
+    $clock.Stop()
+    $plain = $null
   }
 }
 
-function Assert-DedicatedConnectorApplication {
-  param(
-    [Parameter(Mandatory = $true)]$Application,
-    [Parameter(Mandatory = $true)]$ClientServicePrincipal,
-    [Parameter(Mandatory = $true)]$DefenderServicePrincipal,
-    [Parameter(Mandatory = $true)][string]$Label
-  )
-
-  Write-Host "  Existing App Registration: $($Application.DisplayName) ($($Application.AppId))" -ForegroundColor White
-  $foreignRequiredAccess = @($Application.RequiredResourceAccess | Where-Object {
-    $_.ResourceAppId -ne $script:WindowsDefenderAtpAppId -and @($_.ResourceAccess).Count -gt 0
-  })
-  if ($foreignRequiredAccess.Count -gt 0) {
-    $resourceIds = @($foreignRequiredAccess | ForEach-Object ResourceAppId) -join ', '
-    throw "The selected $Label App Registration declares permissions to other APIs ($resourceIds). Refusing to create or expose a client secret for a shared/privileged application."
+function Get-WorkflowValue($Node, [string]$Name) {
+  if ($null -eq $Node -or $Node -is [string] -or $Node -is [ValueType]) { return }
+  if ($Node -is [Collections.IDictionary]) {
+    if ($Node.Contains('name') -and $Node.name -eq $Name -and $Node.Contains('value')) { return $Node.value }
+    foreach ($value in $Node.Values) { Get-WorkflowValue $value $Name }
+  } elseif ($Node -is [Collections.IEnumerable]) {
+    foreach ($value in $Node) { Get-WorkflowValue $value $Name }
   }
-
-  $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $ClientServicePrincipal.Id -All)
-  $foreignAssignments = @($assignments | Where-Object {
-    $_.ResourceId.ToString() -ne $DefenderServicePrincipal.Id.ToString()
-  })
-  if ($foreignAssignments.Count -gt 0) {
-    $resourceIds = @($foreignAssignments | ForEach-Object { $_.ResourceId.ToString() } | Sort-Object -Unique) -join ', '
-    throw "The selected $Label service principal has app-role assignments outside WindowsDefenderATP ($resourceIds). Use a dedicated App Registration."
-  }
-
-  $defenderRoleNames = @($assignments | Where-Object {
-    $_.ResourceId.ToString() -eq $DefenderServicePrincipal.Id.ToString()
-  } | ForEach-Object {
-    $assignmentId = $_.AppRoleId.ToString()
-    $role = $DefenderServicePrincipal.AppRoles | Where-Object { $_.Id.ToString() -eq $assignmentId } | Select-Object -First 1
-    if ($role) { $role.Value } else { $assignmentId }
-  })
-  $displayRoles = if ($defenderRoleNames.Count) { $defenderRoleNames -join ', ' } else { '(none)' }
-  Write-Host "  Current WindowsDefenderATP roles: $displayRoles" -ForegroundColor DarkGray
 }
 
-function Confirm-DefenderPermissionGrant {
-  param([Parameter(Mandatory = $true)][string]$Label, [Parameter(Mandatory = $true)]$Roles)
-
-  Write-Host "  The installer is about to request tenant-wide application permissions for ${Label}:" -ForegroundColor Yellow
-  foreach ($role in $Roles) { Write-Host "    - $($role.Value)" -ForegroundColor Yellow }
-  if ($Label -eq 'Sandbox') {
-    Write-Host "  Machine.LiveResponse and Library.Manage can execute connector scripts on managed endpoints." -ForegroundColor Yellow
+function Get-Parameter([hashtable]$C, [hashtable]$P, $Storage, $Identity, [SecureString]$Secret, [SecureString]$ApiKey, $Settings, $Workflow) {
+  $o = $C.Options
+  $action = if ('IndicatorAction' -notin $C.Explicit -and (Get-Field $Settings 'DefenderIndicatorAction')) { $Settings.DefenderIndicatorAction }
+  else { $o.IndicatorAction }
+  if ($action -notin @('Audit', 'Block')) { throw 'Existing indicator action is invalid. Review the managed configuration.' }
+  $fp = @{functionAppName = $P.Function
+    AzureTenantID = $o.TenantId
+    AzureClientID = $Identity.App.AppId
+    AzureClientSecret = $Secret
+    AzureStorageAccountName = $P.Storage
+    AzureStorageConnectionString = $Storage.Connection
+    LogAnalyticsWorkspaceName = $C.Workspace
+    DeploymentStorageBlobEndpoint = $Storage.Account.PrimaryEndpoints.Blob
+    InstallerInstance = $P.Instance
+    InstallerAppObjectId = $Identity.App.Id
+    InstallerCredentialKeyId = $Identity.KeyId
+    DefenderIndicatorAction = $action
+  }
+  $lp = @{logicAppName = $P.Logic
+    functionAppName = $P.Function
+    InstallerInstance = $P.Instance
+    InstallerAppObjectId = $Identity.App.Id
+    InstallerCredentialKeyId = $Identity.KeyId
+    WorkflowState = $(if ($Workflow -and (Get-Field $Workflow.properties 'state') -eq 'Disabled') { 'Disabled' }
+      else { 'Enabled' })
+  }
+  if ($P.Kind -eq 'Sandbox') {
+    $fp.AzureStorageAccountKey = $Storage.Key
+    $fp.AzureBlobContainerName = 'anyrun-quarantine'
+    $fp.ANYRUN_API_KEY = $ApiKey
+    $fp.DefenderIndicatorGenerateAlert = $true
+    $fp.ConfigureEvidenceLifecyclePolicy = $true
+    $privacy = if ('SandboxPrivacy' -notin $C.Explicit -and $Workflow) {
+      @(Get-WorkflowValue $Workflow.properties.definition 'opt_privacy_type') | Select-Object -First 1
+    } else { $o.SandboxPrivacy }
+    if ($privacy -notin @('owner', 'bylink')) { throw 'Existing analysis privacy is invalid. Set -SandboxPrivacy explicitly.' }
+    $lp.azureTenantId = $o.TenantId
+    $lp.azureClientId = $Identity.App.AppId
+    $lp.azureClientSecret = $Secret
+    $lp.ConnectionName = $P.Connection
+    $lp.analysisPrivacyType = $privacy
   } else {
-    Write-Host "  Ti.ReadWrite lets the dedicated Feeds application manage indicators it creates." -ForegroundColor Yellow
+    $fp.anyrunApiKey = $ApiKey
+    $interval = $o.FeedsIntervalHours
+    $depth = $o.FeedsFetchDepthDays
+    $confidence = $o.FeedsMinimumConfidence
+    if ($Workflow) {
+      if ('FeedsIntervalHours' -notin $C.Explicit) {
+        $recurrence = $Workflow.properties.definition.triggers.Recurrence.recurrence
+        if ($recurrence.frequency -ne 'Hour') { throw 'Set -FeedsIntervalHours explicitly for a non-hourly existing workflow.' }
+        $interval = $recurrence.interval
+      }
+      if ('FeedsFetchDepthDays' -notin $C.Explicit) {
+        $depth = @(Get-WorkflowValue $Workflow.properties.definition 'feed_fetch_depth') | Select-Object -First 1
+      }
+      if ('FeedsMinimumConfidence' -notin $C.Explicit) {
+        $confidence = @(Get-WorkflowValue $Workflow.properties.definition 'minimum_confidence_threshold') | Select-Object -First 1
+      }
+    }
+    if ($interval -lt 1 -or $interval -gt 168 -or $depth -lt 1 -or $depth -gt 365 -or $confidence -lt 1 -or $confidence -gt 100) {
+      throw 'Existing Feeds schedule/filter is invalid. Set the corresponding parameters explicitly.'
+    }
+    $lp.intervalRecurrence = $interval
+    $lp.feedFetchDepth = $depth
+    $lp.minimum_confidence_threshold = $confidence
   }
-
-  if ($ApproveDefenderPermissions) { return }
-  if ($NonInteractive) {
-    throw "Non-interactive consent requires -ApproveDefenderPermissions after reviewing the requested roles."
-  }
-  if (-not (Confirm-Action "  Grant these Defender application permissions?" $false)) {
-    throw "Defender application-permission grant was not approved."
+  return @{Function = $fp
+    Logic = $lp
   }
 }
 
-function Ensure-ConnectorIdentity {
-  param(
-    [Parameter(Mandatory = $true)][string]$Label,
-    [Parameter(Mandatory = $true)][string]$DisplayName,
-    [string]$ExistingAppId,
-    [SecureString]$ExistingClientSecret,
-    [Parameter(Mandatory = $true)][string[]]$RequiredRoleValues,
-    [bool]$TrustedExistingFunctionBinding = $false,
-    [switch]$RotateSecret
-  )
+function Publish-Package {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'Az returns a transient plaintext SAS; secure ARM PackageUri requires SecureString. URI is redacted.'
+  )]
+  param([hashtable]$C, [hashtable]$P, [hashtable]$Storage)
 
-  Write-Host ""
-  Write-Host "  Configuring Entra identity for $Label..." -ForegroundColor White
-
-  $wdatpSp = Get-ResourceServicePrincipal -ResourceAppId $script:WindowsDefenderAtpAppId -FriendlyName "WindowsDefenderATP"
-  $roles = Resolve-AppRoles -ResourceServicePrincipal $wdatpSp -RoleValues $RequiredRoleValues
-
-  $connectorKey = if ($Label -eq 'Sandbox') { 'sandbox' } else { 'feeds' }
-  $installerTag = "$($script:InstallerTagPrefix):$connectorKey"
-  $application = $null
-  $created = $false
-  $newCredentialKeyId = $null
-  if ($ExistingAppId) {
-    $ExistingAppId = Assert-GuidValue -Value $ExistingAppId -Name "$Label AppId"
-    $application = Get-MgApplication -Filter "appId eq '$ExistingAppId'" -Property Id,AppId,DisplayName,RequiredResourceAccess,Tags | Select-Object -First 1
-    if (-not $application) { throw "No App Registration with client ID '$ExistingAppId' was found." }
-    if ($TrustedExistingFunctionBinding) {
-      if (@($application.Tags) -notcontains $installerTag) {
-        throw "The existing $Label Function App references unmarked App Registration '$($application.DisplayName)' ($ExistingAppId). Refusing to trust an identity controlled through Function settings. Re-run with the explicit AppId, client secret, and -ConfirmDedicatedAppRegistration after reviewing the application."
-      }
-      Write-Host "  Reusing the App Registration already bound to the existing $Label Function App." -ForegroundColor Green
-    } else {
-      Write-Host "  The supplied App Registration must be dedicated to the $Label connector; its WindowsDefenderATP permissions will be normalized." -ForegroundColor Yellow
-      $dedicatedConfirmed = $ConfirmDedicatedAppRegistration -or (Confirm-Action "  Confirm that '$($application.DisplayName)' is dedicated to this connector" $false)
-      if (-not $dedicatedConfirmed) {
-        throw "A dedicated App Registration is required. Shared identities can cause TI Feeds to delete indicators created by other workloads."
-      }
-    }
-  } else {
-    $escapedName = $DisplayName.Replace("'", "''")
-    $appMatches = @(Get-MgApplication -Filter "displayName eq '$escapedName'" -Property Id,AppId,DisplayName,RequiredResourceAccess,Tags)
-    if ($appMatches.Count -gt 1) {
-      throw "Multiple App Registrations named '$DisplayName' exist. Re-run with the appropriate AppId parameter."
-    }
-    if ($appMatches.Count -eq 1) {
-      Write-Host "  Found existing App Registration '$DisplayName' ($($appMatches[0].AppId))." -ForegroundColor Yellow
-      if ($NonInteractive -and -not $ConfirmDedicatedAppRegistration) {
-        throw "Non-interactive reuse of an App Registration found by display name requires -ConfirmDedicatedAppRegistration or an explicit connector AppId."
-      }
-      if (Confirm-Action "  Reuse it?" $true) {
-        $application = $appMatches[0]
-        Write-Host "  Reuse is safe only when this App Registration is dedicated to the $Label connector." -ForegroundColor Yellow
-        $dedicatedConfirmed = $ConfirmDedicatedAppRegistration -or (Confirm-Action "  Confirm dedicated use" $false)
-        if (-not $dedicatedConfirmed) {
-          throw "A dedicated App Registration is required."
-        }
-      } else {
-        $DisplayName = Read-Text -Prompt "New App Registration display name" -Default "$DisplayName-$(Get-Date -Format 'yyyyMMdd')"
-      }
-    }
+  $container = 'anyrun-installer-artifacts'
+  $blob = "$($P.Hashes.Package).zip"
+  $null = Get-PrivateContainer $C $Storage $container
+  $null = Set-AzStorageBlobContent -File (Join-Path $C.Root "Assets/$($P.Kind).zip") -Container $container -Blob $blob -Context $Storage.Context -Force
+  $sasOptions = @{
+    Container = $container
+    Blob = $blob
+    Permission = 'r'
+    Protocol = 'HttpsOnly'
+    StartTime = [DateTime]::UtcNow.AddMinutes(-5)
+    ExpiryTime = [DateTime]::UtcNow.AddHours(2)
+    FullUri = $true
+    Context = $Storage.Context
   }
-
-  if (-not $application) {
-    Write-Step "Creating App Registration '$DisplayName'..."
-    $application = New-MgApplication -DisplayName $DisplayName -SignInAudience "AzureADMyOrg" -Tags @($installerTag)
-    $application = Get-MgApplication -ApplicationId $application.Id -Property Id,AppId,DisplayName,RequiredResourceAccess,Tags
-    $created = $true
-    Write-Host "  Created App Registration with client ID $($application.AppId)." -ForegroundColor Green
-  }
-
-  $appSp = Get-OrCreateClientServicePrincipal -ApplicationId $application.AppId
-
-  if (-not $created) {
-    Assert-DedicatedConnectorApplication -Application $application -ClientServicePrincipal $appSp `
-      -DefenderServicePrincipal $wdatpSp -Label $Label
-    if (@($application.Tags) -notcontains $installerTag) {
-      if ($TrustedExistingFunctionBinding) { throw "Unmarked Function binding cannot be adopted implicitly." }
-      $updatedTags = @(@($application.Tags) + @($installerTag)) | Sort-Object -Unique
-      Update-MgApplication -ApplicationId $application.Id -Tags $updatedTags
-      Write-Host "  Added installer ownership marker '$installerTag'." -ForegroundColor Green
-    }
-  }
-
-  Write-Step "Ensuring WindowsDefenderATP application permissions..."
-  $requiredResourceAccess = Merge-RequiredResourceAccess -Application $application -ResolvedRoles $roles
-  Update-MgApplication -ApplicationId $application.Id -RequiredResourceAccess $requiredResourceAccess
-
-  Write-Step "Granting tenant-wide admin consent when permitted..."
-  $consentDeferred = $false
-  if (Test-AppRoleConsent -ClientServicePrincipalId $appSp.Id -RequiredRoles $roles) {
-    Write-Host "  All required application permissions are already granted." -ForegroundColor Green
-  } else {
-    Confirm-DefenderPermissionGrant -Label $Label -Roles $roles
-    $granted = Grant-AppRoleConsent -ClientServicePrincipalId $appSp.Id -ResourceServicePrincipalId $wdatpSp.Id -RequiredRoles $roles
-    $consentVisible = if ($granted) {
-      Wait-ForConsent -ClientServicePrincipalId $appSp.Id -RequiredRoles $roles -Attempts 2
-    } else {
-      $false
-    }
-    if (-not $consentVisible) {
-      $consentUrl = "https://login.microsoftonline.com/$TenantId/adminconsent?client_id=$($application.AppId)"
-      Write-Host ""
-      Write-Host "  An Application Administrator, Cloud Application Administrator, Privileged Role Administrator, or Global Administrator must grant consent:" -ForegroundColor Yellow
-      Write-Host "  $consentUrl" -ForegroundColor Cyan
-      if ($DeferConsent) {
-        $choice = 2
-      } elseif ($NonInteractive) {
-        throw "Admin consent is not visible yet. Grant consent and re-run, or add -DeferConsent to deploy only the Function App now."
-      } else {
-        $choice = Read-Choice -Prompt "Admin consent" -Options @(
-          "Consent was granted; verify now",
-          "Continue with Function App only and grant consent later"
-        ) -Default 1
-      }
-      if ($choice -eq 1) {
-        if (-not (Wait-ForConsent -ClientServicePrincipalId $appSp.Id -RequiredRoles $roles)) {
-          Write-Host "  Consent could not be verified yet. The URL will be repeated in the summary." -ForegroundColor Yellow
-          $consentDeferred = $true
-        }
-      } else {
-        $consentDeferred = $true
-      }
-      if ($consentDeferred) {
-        $script:DeferredConsentUrls.Add($consentUrl)
-        $script:DeferredConnectorLabels.Add($Label)
-      }
-    }
-  }
-
-  if (-not $consentDeferred) {
-    Remove-ExcessDefenderConsent -ClientServicePrincipalId $appSp.Id `
-      -ResourceServicePrincipalId $wdatpSp.Id -RequiredRoles $roles
-  }
-
-  $clientSecret = if ($RotateSecret) { $null } else { $ExistingClientSecret }
-  if ($RotateSecret) {
-    $newCredential = New-ConnectorSecret -Application $application -Label $Label
-    $clientSecret = $newCredential.Secret
-    $newCredentialKeyId = $newCredential.KeyId
-  } elseif (-not $clientSecret) {
-    if ($created) {
-      $newCredential = New-ConnectorSecret -Application $application -Label $Label
-      $clientSecret = $newCredential.Secret
-      $newCredentialKeyId = $newCredential.KeyId
-    } else {
-      $secretChoice = Read-Choice -Prompt "Client secret for '$($application.DisplayName)'" -Options @(
-        "Paste an existing secret",
-        "Generate a new secret"
-      ) -Default 1
-      if ($secretChoice -eq 1) {
-        $clientSecret = Read-RequiredSecret "  Client secret"
-      } else {
-        $newCredential = New-ConnectorSecret -Application $application -Label $Label
-        $clientSecret = $newCredential.Secret
-        $newCredentialKeyId = $newCredential.KeyId
-      }
-    }
-  }
-
-  if (-not $consentDeferred) {
-    Test-DefenderCredential -ClientId $application.AppId -ClientSecret $clientSecret `
-      -RequiredRoleValues $RequiredRoleValues -Label $Label
-  }
-
-  return [pscustomobject]@{
-    ApplicationObjectId = $application.Id
-    ClientId           = $application.AppId
-    ClientSecret       = $clientSecret
-    ConsentDeferred    = $consentDeferred
-    DisplayName        = $application.DisplayName
-    NewCredentialKeyId = $newCredentialKeyId
-  }
+  $uri = New-AzStorageBlobSASToken @sasOptions
+  $C.Secrets.Add($uri)
+  return (ConvertTo-SecureString $uri -AsPlainText -Force)
 }
 
-function Ensure-ResourceGroup {
-  param([string]$Name, [string]$Location)
-  $existing = Get-AzResourceGroup -Name $Name -ErrorAction SilentlyContinue
-  if ($existing) {
-    if ($existing.Location -ne $Location) {
-      Write-Host "  Resource group already exists in '$($existing.Location)'; using that location." -ForegroundColor Yellow
+function Deploy-Template([hashtable]$C, [hashtable]$P, [string]$Kind, [hashtable]$Parameters) {
+  $file = Join-Path $C.Root "Assets/$($P.Kind).$Kind.json"
+  $Parameters.DeploymentRegion = $C.Options.Region
+  $Parameters.ResourceTags = Get-TemplateTag $C $P $Kind
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+
+    $errors = @(Test-AzResourceGroupDeployment -ResourceGroupName $C.Options.ResourceGroup -TemplateFile $file -TemplateParameterObject $Parameters)
+    if ($errors.Count) {
+      throw ("$($P.Kind) $Kind validation failed: " + (($errors | ForEach-Object { $_.Message }) -join '; '))
     }
-    return $existing
-  }
-  Write-Step "Creating resource group '$Name' in '$Location'..."
-  return New-AzResourceGroup -Name $Name -Location $Location
-}
-
-function Ensure-LogAnalyticsWorkspace {
-  param([string]$ResourceGroupName, [string]$Name, [string]$Location)
-  $workspace = Get-AzOperationalInsightsWorkspace -ResourceGroupName $ResourceGroupName -Name $Name -ErrorAction SilentlyContinue
-  if ($workspace) {
-    Write-Host "  Reusing Log Analytics workspace '$Name'." -ForegroundColor Green
-    return $workspace
-  }
-  Write-Step "Creating Log Analytics workspace '$Name'..."
-  return New-AzOperationalInsightsWorkspace -ResourceGroupName $ResourceGroupName -Name $Name -Location $Location -Sku PerGB2018
-}
-
-function Ensure-StorageAccount {
-  param([string]$ResourceGroupName, [string]$Name, [string]$Location)
-
-  if ($Name -notmatch '^[a-z0-9]{3,24}$') {
-    throw "Storage account name '$Name' must contain 3-24 lowercase letters or numbers."
-  }
-
-  $created = $false
-  $account = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $Name -ErrorAction SilentlyContinue
-  if ($account) {
-    Write-Host "  Reusing storage account '$Name'." -ForegroundColor Green
-    $propertyNames = @($account.PSObject.Properties.Name)
-    if ($propertyNames -contains "AllowSharedKeyAccess" -and $account.AllowSharedKeyAccess -eq $false) {
-      throw "Storage account '$Name' has AllowSharedKeyAccess=false. The current connector runtime uses account keys and cannot use this account."
-    }
-  } else {
-    $availability = Get-AzStorageAccountNameAvailability -Name $Name
-    if (-not $availability.NameAvailable) {
-      throw "Storage account name '$Name' is unavailable: $($availability.Message)"
-    }
-    Write-Step "Creating storage account '$Name'..."
-    $account = New-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $Name -Location $Location `
-      -SkuName Standard_LRS -Kind StorageV2 -EnableHttpsTrafficOnly $true -MinimumTlsVersion TLS1_2 `
-      -AllowBlobPublicAccess $false
-    $created = $true
-  }
-
-  # Re-read the effective state because an Azure Policy with Modify can change
-  # AllowSharedKeyAccess during creation.
-  $account = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $Name
-  $allowSharedKeyAccess = Get-ObjectPropertyValue -InputObject $account -Name "AllowSharedKeyAccess"
-  if ($allowSharedKeyAccess -eq $false) {
-    throw "Storage account '$Name' has AllowSharedKeyAccess=false after policy evaluation. The current connector runtime requires account keys."
-  }
-
-  $keys = @(Get-AzStorageAccountKey -ResourceGroupName $ResourceGroupName -Name $Name)
-  if ($keys.Count -eq 0) { throw "No access key was returned for storage account '$Name'." }
-  $storageSuffix = (Get-AzContext).Environment.StorageEndpointSuffix
-  if ([string]::IsNullOrWhiteSpace($storageSuffix)) { $storageSuffix = "core.windows.net" }
-  $connectionString = "DefaultEndpointsProtocol=https;AccountName=$Name;AccountKey=$($keys[0].Value);EndpointSuffix=$storageSuffix"
-
-  return [pscustomobject]@{
-    Name                   = $Name
-    Key                    = ConvertTo-SecureValue -Value $keys[0].Value
-    ConnectionString       = ConvertTo-SecureValue -Value $connectionString
-    Created                = $created
-  }
-}
-
-function Remove-ConnectorDeploymentArtifacts {
-  param(
-    [Parameter(Mandatory = $true)][string]$StorageAccountName,
-    [Parameter(Mandatory = $true)][bool]$AllowRoleCleanup
-  )
-
-  if (-not $AllowRoleCleanup) {
-    Write-Host "  Custom storage name supplied; automatic stale role-assignment cleanup is disabled." -ForegroundColor DarkGray
-    return
-  }
-
-  $storage = Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $StorageAccountName -ErrorAction SilentlyContinue
-  if (-not $storage) { return }
-
-  # The templates use a deterministic role-assignment name that omits principalId.
-  # If a Function App was deleted and recreated, the old assignment can block ARM
-  # with RoleAssignmentUpdateNotPermitted. On connector-owned storage, remove only
-  # assignments whose principal has already been deleted. Azure can report
-  # ObjectType=Unknown merely because the operator cannot resolve directory
-  # objects, so absence is confirmed through the authenticated Graph session.
-  $assignments = @(Get-AzRoleAssignment -Scope $storage.Id -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.Scope -eq $storage.Id -and
-      $_.RoleDefinitionId -like "*$($script:StorageBlobDataOwnerRoleId)"
-    })
-  if (@($assignments | Where-Object ObjectType -eq "Unknown").Count -gt 0 -and -not $ForceGraphDeviceCode) {
-    Connect-GraphSmart -RequestedTenantId $TenantId
-  }
-  foreach ($assignment in $assignments) {
-    if ($assignment.ObjectType -ne "Unknown") { continue }
-    $confirmedDeleted = $false
+    $name = "anyrun-$($P.Kind.ToLowerInvariant())-$($Kind.ToLowerInvariant())-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
     try {
-      Get-MgServicePrincipal -ServicePrincipalId $assignment.ObjectId -Property Id -ErrorAction Stop | Out-Null
-    } catch {
-      $graphMessage = "$($_.Exception.Message)"
-      if ($graphMessage -match '404|Request_ResourceNotFound|does not exist|not found') {
-        $confirmedDeleted = $true
-      } else {
-        Write-Host "  Could not verify stale principal '$($assignment.ObjectId)'; preserving its role assignment." -ForegroundColor Yellow
+      $deploymentOptions = @{
+        Name = $name
+        ResourceGroupName = $C.Options.ResourceGroup
+        TemplateFile = $file
+        TemplateParameterObject = $Parameters
+        Mode = 'Incremental'
+        Debug = $false
+        Verbose = $false
       }
-    }
-    if (-not $confirmedDeleted) { continue }
-    Write-Host "  Removing stale Storage Blob Data Owner assignment '$($assignment.RoleAssignmentName)'..." -ForegroundColor Yellow
-    Remove-AzRoleAssignment -InputObject $assignment | Out-Null
-  }
-}
-
-function Remove-LegacyStorageRoleAssignment {
-  param(
-    [Parameter(Mandatory = $true)][string]$StorageAccountName,
-    [Parameter(Mandatory = $true)][string]$FunctionAppName,
-    [Parameter(Mandatory = $true)][ValidateSet('Sandbox', 'Feeds')][string]$ConnectorType
-  )
-
-  $storage = Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $StorageAccountName -ErrorAction SilentlyContinue
-  if (-not $storage) { return }
-  $sitePath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$($FunctionAppName)?api-version=2024-11-01"
-  try {
-    $site = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $sitePath)
-  } catch { return }
-  if (-not $site) { return }
-  $identity = Get-ObjectPropertyValue -InputObject $site -Name "identity"
-  if (-not $identity) { return }
-  $principalId = "$(Get-ObjectPropertyValue -InputObject $identity -Name 'principalId')"
-  if ($principalId -notmatch '^[0-9a-fA-F-]{36}$') { return }
-
-  $legacyNames = [System.Collections.Generic.List[string]]::new()
-  $legacyNames.Add((Get-ArmGuid -Values @($storage.Id, $script:StorageBlobDataOwnerRoleId)))
-  if ($ConnectorType -eq 'Feeds') {
-    $legacyNames.Add((Get-ArmGuid -Values @($storage.Id, $script:StorageBlobDataOwnerRoleId, 'feeds')))
-  }
-  $legacyAssignments = @(Get-AzRoleAssignment -Scope $storage.Id -ErrorAction SilentlyContinue | Where-Object {
-    $_.Scope -eq $storage.Id -and
-    $_.ObjectId.ToString() -eq $principalId -and
-    $legacyNames -contains $_.RoleAssignmentName
-  })
-  foreach ($assignment in $legacyAssignments) {
-    Write-Host "  Removing legacy Storage Blob Data Owner assignment '$($assignment.RoleAssignmentName)' before idempotent migration..." -ForegroundColor Yellow
-    Remove-AzRoleAssignment -InputObject $assignment | Out-Null
-  }
-}
-
-function New-PreparedFunctionTemplate {
-  param(
-    [Parameter(Mandatory = $true)][string]$TemplateUri,
-    [Parameter(Mandatory = $true)][ValidateSet("Sandbox", "Feeds")][string]$ConnectorType,
-    [Parameter(Mandatory = $true)][string]$ExpectedTemplateHash
-  )
-
-  $temporaryPath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-$($ConnectorType.ToLowerInvariant())-$([Guid]::NewGuid().ToString('N')).json"
-  $script:TemporaryFiles.Add($temporaryPath)
-  Get-VerifiedRemoteFile -Uri $TemplateUri -Destination $temporaryPath -ExpectedSha256 $ExpectedTemplateHash `
-    -Label "$ConnectorType Function template" | Out-Null
-  $template = Get-Content -LiteralPath $temporaryPath -Raw | ConvertFrom-Json
-  $extension = @($template.resources | Where-Object type -eq "Microsoft.Web/sites/extensions") | Select-Object -First 1
-  if (-not $extension) { throw "Function template '$TemplateUri' does not contain a Microsoft.Web/sites/extensions resource." }
-
-  $connectorPath = if ($ConnectorType -eq "Sandbox") { "ANYRUN-Sandbox-MDE" } else { "ANYRUN-TI-Feeds-MDE" }
-  $packageName = if ($ConnectorType -eq "Sandbox") { "ANYRUN-Sandbox-MDE-FA.zip" } else { "ANYRUN-Feeds-MDE-FA.zip" }
-  $packageUri = "https://raw.githubusercontent.com/$Repository/$($script:ResolvedRepositoryRef)/Microsoft%20Defender%20for%20Endpoint/$connectorPath/Function%20App/$packageName"
-  $extension.properties.packageUri = $packageUri
-
-  $expectedPackageHash = if ($ConnectorType -eq "Sandbox") { $SandboxPackageSha256 } else { $FeedsPackageSha256 }
-  $packagePath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-package-$([Guid]::NewGuid().ToString('N')).zip"
-  try {
-    Write-Step "Checking the $ConnectorType Function package declared by the template..."
-    $actualPackageHash = Get-VerifiedRemoteFile -Uri $packageUri -Destination $packagePath `
-      -ExpectedSha256 $expectedPackageHash -Label "$ConnectorType Function package"
-
-    $archive = $null
-    try {
-      $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
-      $entryNames = @($archive.Entries | ForEach-Object FullName)
-      $functionDirectory = if ($ConnectorType -eq "Sandbox") { "ANYRUN-Sandbox-MDE-FA" } else { "ANYRUN-Feeds-MDE-FA" }
-      $requiredEntries = @("host.json", "requirements.txt", "$functionDirectory/function.json")
-      $missingEntries = @($requiredEntries | Where-Object { $entryNames -notcontains $_ })
-      if ($missingEntries.Count -gt 0) {
-        throw "$ConnectorType package is missing required ZIP entries: $($missingEntries -join ', ')."
-      }
+      $result = New-AzResourceGroupDeployment @deploymentOptions
+      if ($result.ProvisioningState -ne 'Succeeded') { throw "Deployment ended in $($result.ProvisioningState)." }
+      break
     } catch {
-      throw "$ConnectorType package at '$packageUri' is not a valid Function deployment ZIP: $($_.Exception.Message)"
-    } finally {
-      if ($archive) { $archive.Dispose() }
-    }
-
-  } finally {
-    Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
-  }
-
-  # Do not silently remove arbitrary resources from downloaded templates. The
-  # reviewed templates do not contain the historical WaitSection deployment
-  # script; if an older template is supplied, fail and require an explicit
-  # template upgrade instead of changing its behavior in memory.
-  $waitSections = @($template.resources | Where-Object {
-    $_.type -eq "Microsoft.Resources/deploymentScripts" -and $_.name -eq "WaitSection"
-  })
-  if ($waitSections.Count -gt 0) {
-    throw "$ConnectorType Function template still contains the obsolete WaitSection deployment script. Use a reviewed current template."
-  }
-  $roleAssignment = @($template.resources | Where-Object type -eq "Microsoft.Authorization/roleAssignments") | Select-Object -First 1
-  if ($roleAssignment) {
-    if (-not $roleAssignment.scope -or "$($roleAssignment.scope)" -notmatch 'Microsoft\.Storage/storageAccounts') {
-      throw "$ConnectorType Function template storage role assignment is not scoped to the connector storage account."
-    }
-    $roleAssignment.properties | Add-Member -NotePropertyName principalType -NotePropertyValue "ServicePrincipal" -Force
-
-    # A role assignment with scope=storageAccount is an ARM extension resource.
-    # Its dependency ID must include that scope; resourceId(roleAssignments, ...)
-    # would point at a different resource at resource-group scope.
-    $roleAssignmentNameExpression = "$($roleAssignment.name)".Trim()
-    if ($roleAssignmentNameExpression.StartsWith('[') -and $roleAssignmentNameExpression.EndsWith(']')) {
-      $roleAssignmentNameExpression = $roleAssignmentNameExpression.Substring(1, $roleAssignmentNameExpression.Length - 2)
-    }
-    $extension.dependsOn = @("[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName')), 'Microsoft.Authorization/roleAssignments', $roleAssignmentNameExpression)]")
-  } else {
-    # A template that has already received the scoped-RBAC fix keeps the role
-    # assignment inside a nested deployment. Preserve it and make onedeploy
-    # depend on that deployment instead of trying to transform it again.
-    $roleDeployment = @($template.resources | Where-Object {
-      $_.type -eq "Microsoft.Resources/deployments" -and
-      $_.properties.template -and
-      @($_.properties.template.resources | Where-Object type -eq "Microsoft.Authorization/roleAssignments").Count -gt 0
-    }) | Select-Object -First 1
-    if (-not $roleDeployment) { throw "$ConnectorType Function template does not contain its storage role assignment." }
-
-    $nestedRoleAssignment = @($roleDeployment.properties.template.resources | Where-Object type -eq "Microsoft.Authorization/roleAssignments") | Select-Object -First 1
-    if (-not $nestedRoleAssignment.scope -or "$($nestedRoleAssignment.scope)" -notmatch 'Microsoft\.Storage/storageAccounts') {
-      throw "$ConnectorType Function template storage role assignment is not scoped to the connector storage account."
-    }
-    $nestedRoleAssignment.properties | Add-Member -NotePropertyName principalType -NotePropertyValue "ServicePrincipal" -Force
-
-    $roleDeploymentNameExpression = "$($roleDeployment.name)".Trim()
-    if ($roleDeploymentNameExpression.StartsWith('[') -and $roleDeploymentNameExpression.EndsWith(']')) {
-      $roleDeploymentNameExpression = $roleDeploymentNameExpression.Substring(1, $roleDeploymentNameExpression.Length - 2)
-    } else {
-      $escapedRoleDeploymentName = $roleDeploymentNameExpression.Replace("'", "''")
-      $roleDeploymentNameExpression = "'$escapedRoleDeploymentName'"
-    }
-    $extension.dependsOn = @("[resourceId('Microsoft.Resources/deployments', $roleDeploymentNameExpression)]")
-  }
-  $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $temporaryPath -Encoding utf8NoBOM
-  Write-Host "  Pinned $ConnectorType packageUri to immutable commit '$($script:ResolvedRepositoryRef)'." -ForegroundColor DarkGray
-  return $temporaryPath
-}
-
-function New-RegionalLogicTemplate {
-  param(
-    [Parameter(Mandatory = $true)][string]$TemplateUri,
-    [Parameter(Mandatory = $true)][ValidateSet("Sandbox", "Feeds")][string]$ConnectorType,
-    [Parameter(Mandatory = $true)][string]$ExpectedTemplateHash
-  )
-
-  $temporaryPath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-$($ConnectorType.ToLowerInvariant())-logic-$([Guid]::NewGuid().ToString('N')).json"
-  $script:TemporaryFiles.Add($temporaryPath)
-  Get-VerifiedRemoteFile -Uri $TemplateUri -Destination $temporaryPath -ExpectedSha256 $ExpectedTemplateHash `
-    -Label "$ConnectorType Logic template" | Out-Null
-  $template = Get-Content -LiteralPath $temporaryPath -Raw | ConvertFrom-Json
-  $workflow = @($template.resources | Where-Object type -eq "Microsoft.Logic/workflows") | Select-Object -First 1
-  if (-not $workflow) { throw "$ConnectorType Logic App template does not contain a Microsoft.Logic/workflows resource." }
-  $workflow.location = "[resourceGroup().location]"
-  $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $temporaryPath -Encoding utf8NoBOM
-  return $temporaryPath
-}
-
-function Test-ArmDeployment {
-  param(
-    [Parameter(Mandatory = $true)][string]$Label,
-    [string]$TemplateUri,
-    [string]$TemplateFile,
-    [Parameter(Mandatory = $true)][hashtable]$TemplateParameters
-  )
-
-  $splat = @{
-    ResourceGroupName       = $ResourceGroup
-    TemplateParameterObject = $TemplateParameters
-    ErrorAction             = "Stop"
-  }
-  if ($TemplateFile) { $splat.TemplateFile = $TemplateFile }
-  else               { $splat.TemplateUri = $TemplateUri }
-
-  Write-Step "Validating $Label against Azure Policy and ARM..."
-  $validationErrors = @(Test-AzResourceGroupDeployment @splat)
-  if ($validationErrors.Count -gt 0) {
-    $messages = @($validationErrors | ForEach-Object { $_.Message }) -join "`n"
-    throw "$Label pre-flight validation failed:`n$messages"
-  }
-  Write-Host "  $Label ARM validation succeeded." -ForegroundColor Green
-}
-
-function Get-DeploymentOperationDiagnostic {
-  param([Parameter(Mandatory = $true)]$Operation)
-
-  $target = Get-ObjectPropertyValue -InputObject $Operation -Name "TargetResource"
-  $resourceName = $null
-  if ($target -is [string]) {
-    $resourceName = $target
-  } elseif ($target) {
-    $resourceName = Get-ObjectPropertyValue -InputObject $target -Name "ResourceName"
-    if (-not $resourceName) { $resourceName = Get-ObjectPropertyValue -InputObject $target -Name "Id" }
-    if (-not $resourceName) { $resourceName = Get-ObjectPropertyValue -InputObject $target -Name "ResourceType" }
-  }
-  if (-not $resourceName) {
-    $resourceName = Get-ObjectPropertyValue -InputObject $Operation -Name "OperationId"
-  }
-  if (-not $resourceName) { $resourceName = "unknown resource" }
-
-  $statusMessage = Get-ObjectPropertyValue -InputObject $Operation -Name "StatusMessage"
-  if (-not $statusMessage) {
-    $statusMessage = Get-ObjectPropertyValue -InputObject $Operation -Name "ProvisioningState"
-  }
-  if ($statusMessage -and $statusMessage -isnot [string]) {
-    $statusMessage = $statusMessage | ConvertTo-Json -Depth 20 -Compress
-  }
-  if (-not $statusMessage) { $statusMessage = "No status message was returned by Azure." }
-
-  return [pscustomobject]@{
-    Resource = "$resourceName"
-    Message  = "$statusMessage"
-  }
-}
-
-function Invoke-ArmDeployment {
-  param(
-    [string]$Label,
-    [string]$TemplateUri,
-    [string]$TemplateFile,
-    [hashtable]$TemplateParameters
-  )
-
-  if ($TemplateFile) {
-    if (-not (Test-Path -LiteralPath $TemplateFile -PathType Leaf)) { throw "Template file '$TemplateFile' does not exist." }
-  } elseif (-not $TemplateUri) {
-    throw "No template URI or file was supplied for '$Label'."
-  }
-
-  $baseName = ("anyrun-{0}-{1}" -f ($Label -replace '[^a-zA-Z0-9-]', '-').ToLowerInvariant(), (Get-Date -Format 'yyyyMMddHHmmss'))
-  $maxAttempts = 5
-  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-    $deploymentName = "$baseName-$attempt"
-    $splat = @{
-      Name                    = $deploymentName
-      ResourceGroupName       = $ResourceGroup
-      TemplateParameterObject = $TemplateParameters
-      Mode                    = "Incremental"
-    }
-    if ($TemplateFile) { $splat.TemplateFile = $TemplateFile }
-    else               { $splat.TemplateUri = $TemplateUri }
-
-    try {
-      Write-Step "Deploying $Label (attempt $attempt/$maxAttempts)..."
-      $deployment = New-AzResourceGroupDeployment @splat
-      if ($deployment.ProvisioningState -ne "Succeeded") {
-        throw "$Label deployment completed with state '$($deployment.ProvisioningState)'."
-      }
-      Write-Host "  $Label deployment succeeded." -ForegroundColor Green
-      return $deployment
-    } catch {
-      $errorDetails = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { "" }
-      $message = "$($_.Exception.Message) $errorDetails"
-      $failedOperations = @(Get-AzResourceGroupDeploymentOperation -ResourceGroupName $ResourceGroup `
-        -DeploymentName $deploymentName -ErrorAction SilentlyContinue |
-        Where-Object { (Get-ObjectPropertyValue -InputObject $_ -Name "ProvisioningState") -eq "Failed" })
-      $operationDiagnostics = @($failedOperations | ForEach-Object {
-        Get-DeploymentOperationDiagnostic -Operation $_
-      })
-      $operationMessages = @($operationDiagnostics | ForEach-Object { $_.Message }) -join " `n"
-      $message = "$message $operationMessages"
-
-      $identityNotReady = $message -match 'PrincipalNotFound|replication delay|does not exist in the directory'
-      $onedeployFailed = @($operationDiagnostics | Where-Object {
-        $_.Resource -match '(?i)(?:/|\\)extensions(?:/|\\)onedeploy$|sites/extensions.*onedeploy'
-      }).Count -gt 0
-      $packageRbacNotReady = $message -match 'AuthorizationPermissionMismatch' -or (
-        $message -match '(?i)(?:status\s*code|http)?\s*403|Forbidden' -and
-        $message -match '(?i)onedeploy|sites/extensions|package|blob|storage'
-      )
-      $transientOneDeployFailure = $onedeployFailed -and $message -match '(?i)No status message|Code:\s*\)|timeout|temporar|InternalServerError|ServiceUnavailable'
-      if ($attempt -lt $maxAttempts -and ($identityNotReady -or $packageRbacNotReady -or $transientOneDeployFailure)) {
-        $waitSeconds = if ($packageRbacNotReady) { 45 } else { 30 }
-        $reason = if ($packageRbacNotReady) {
-          "onedeploy failed while package access or Storage RBAC may still be propagating"
-        } elseif ($transientOneDeployFailure) {
-          "onedeploy returned an explicitly transient or empty diagnostic"
-        } else {
-          "Managed identity has not replicated"
-        }
-        Write-Host "  $reason; waiting $waitSeconds seconds before retry." -ForegroundColor Yellow
-        Start-Sleep -Seconds $waitSeconds
+      $message = $_.Exception.Message
+      $operations = @(Get-AzResourceGroupDeploymentOperation -ResourceGroupName $C.Options.ResourceGroup `
+          -DeploymentName $name -ErrorAction SilentlyContinue | Where-Object ProvisioningState -eq Failed)
+      $details = @($operations | ForEach-Object { "$(Get-Field $_ 'TargetResource'): $(Get-Field $_ 'StatusMessage')" }) -join '; '
+      $terminal = Get-AzResourceGroupDeployment -ResourceGroupName $C.Options.ResourceGroup -Name $name -ErrorAction SilentlyContinue
+      if ($attempt -lt 3 -and $terminal -and $terminal.ProvisioningState -eq 'Failed' -and "$message $details" -match 'AuthorizationPermissionMismatch|StorageAccountAccessDenied|RBAC.*propagat') {
+        Write-Host 'Waiting for Function storage RBAC propagation before retrying the failed deployment...' -ForegroundColor DarkGray
+        Start-Sleep -Seconds 30
         continue
       }
-      Write-Host "  Failed deployment operations:" -ForegroundColor Yellow
-      if ($operationDiagnostics.Count -eq 0) {
-        Write-Host "    $message" -ForegroundColor Yellow
-      } else {
-        $operationDiagnostics | ForEach-Object {
-          Write-Host "    $($_.Resource): $($_.Message)" -ForegroundColor Yellow
+      throw (Protect-Message $C "$($P.Kind) $Kind deployment failed: $message $details")
+    }
+  }
+}
+
+function Get-Handler([hashtable]$C, [hashtable]$P) {
+  $body = Read-Arm $C "$(Get-ResourcePath $C Microsoft.Web/sites $P.Function)/functions?api-version=2024-11-01"
+  if (-not $body) { return @() }
+  if (-not $body.Contains('value') -or $null -eq $body.value -or (Get-Field $body 'nextLink')) {
+    throw 'Function handler inventory is incomplete. No deployment will overwrite it.'
+  }
+  return @($body.value | ForEach-Object { ($_.name -split '/')[-1] })
+}
+
+function Test-Installation([hashtable]$C, [hashtable]$P) {
+  $errors = [Collections.Generic.List[string]]::new()
+  try {
+    $handlers = @(Get-Handler $C $P)
+    foreach ($handler in $P.Handlers) {
+      if ($handler -notin $handlers) { $errors.Add("Missing Function handler: $handler") }
+    }
+  } catch { $errors.Add((Protect-Message $C $_.Exception.Message)) }
+  foreach ($pair in @(@('Microsoft.Web/sites', $P.Function, '2024-11-01'), @('Microsoft.Logic/workflows', $P.Logic, '2019-05-01'))) {
+    try {
+      $resource = Read-Arm $C "$(Get-ResourcePath $C $pair[0] $pair[1])?api-version=$($pair[2])"
+      $state = Get-Field (Get-Field $resource 'properties') $(if ($pair[0] -eq 'Microsoft.Web/sites') { 'state' }
+        else { 'provisioningState' })
+      if (-not $resource -or $state -notin @('Succeeded', 'Running')) { $errors.Add("$($pair[0]) provisioning state: $state") }
+    } catch { $errors.Add((Protect-Message $C $_.Exception.Message)) }
+  }
+  if ($P.Kind -eq 'Sandbox') {
+    try {
+      $connection = Read-Arm $C "$(Get-ResourcePath $C Microsoft.Web/connections $P.Connection)?api-version=2016-06-01"
+      if (-not @($connection.properties.statuses | Where-Object status -eq 'Connected').Count) {
+        $errors.Add('Defender API connection is not Connected.')
+      }
+    } catch { $errors.Add((Protect-Message $C $_.Exception.Message)) }
+  }
+  if ($errors.Count) { throw ($errors -join "`n") }
+}
+
+function Install-Connector {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'Graph and existing Function settings supply transient plaintext credentials; ARM requires SecureString. Values are redacted.'
+  )]
+  param([hashtable]$C, [hashtable]$P)
+  Write-Host "Installing $($P.Kind)..." -ForegroundColor Cyan
+  $storage = Get-Storage $C $P
+  $null = Get-PrivateContainer $C $storage 'anyrun-installer-artifacts'
+  if (Test-RequestedTag $C $storage.Account) {
+    $null = Get-CorporateTag $C $storage.Account
+    $null = Update-AzTag -ResourceId $storage.Account.Id -Operation Merge -Tag $C.Options.Tags
+  }
+  $site = Read-Arm $C "$(Get-ResourcePath $C Microsoft.Web/sites $P.Function)?api-version=2024-11-01"
+  Assert-Managed $site $P.Instance $P.Kind
+  if ($site -and (Get-Field $site 'kind') -notmatch '(^|,)functionapp(,|$)') { throw 'The managed site is not a Function App.' }
+  $workflow = Read-Arm $C "$(Get-ResourcePath $C Microsoft.Logic/workflows $P.Logic)?api-version=2019-05-01"
+  Assert-Managed $workflow $P.Instance $P.Kind
+  $identity = Get-Identity $C $P $storage
+  if ($identity.PendingConsent) {
+    return @{Connector = $P.Kind
+      Status = 'NeedsConsent'
+      AppId = $identity.App.AppId
+      ApplicationObjectId = $identity.App.Id
+    }
+  }
+  $recordedApp = Get-Field (Get-Field $site 'tags') 'ANYRUNApplicationObjectId'
+  if ($recordedApp -and $recordedApp -ne $identity.App.Id) { throw 'Function identity metadata differs from the managed application.' }
+  $settings = Read-FunctionSetting $C $P $site
+  if ((Get-Field $settings 'AzureClientID') -and $settings.AzureClientID -ne $identity.App.AppId) {
+    throw 'Managed Function App uses another client ID. Its configuration will not be replaced.'
+  }
+  $savedId = Get-Field (Get-Field $site 'tags') 'ANYRUNCredentialKeyId'
+  $secret = Get-Field $settings 'AzureClientSecret'
+  $identity.NewCredential = $false
+  if ($secret -and "$secret" -like '@Microsoft.KeyVault(*)') {
+    throw 'This installer cannot resolve an externally configured Key Vault credential.'
+  }
+  if ($secret -and $savedId -notin @($identity.App.PasswordCredentials | ForEach-Object { "$($_.KeyId)" })) {
+    throw 'Recorded Function credential KeyId does not match this application. Review the managed resource.'
+  }
+  $apiKey = $C.Options["$($P.Kind)ApiKey"]
+  if (-not $apiKey) {
+    $apiKeyName = if ($P.Kind -eq 'Sandbox') { 'ANYRUN_API_KEY' }
+    else { 'ANYRUN_api_key' }
+    $savedApiKey = Get-Field $settings $apiKeyName
+    if ($savedApiKey -and "$savedApiKey" -like '@Microsoft.KeyVault(*)') {
+      throw 'Pass the resolved API key explicitly for an externally configured Key Vault reference.'
+    }
+    if ($savedApiKey) { $apiKey = ConvertTo-SecureString ("$savedApiKey" -replace '^API-KEY\s+', '') -AsPlainText -Force }
+    elseif ($C.Options.NonInteractive) { throw "NonInteractive installation requires -$($P.Kind)ApiKey as SecureString." }
+    else { $apiKey = Read-Host "ANY.RUN $($P.Kind) API key" -AsSecureString }
+  }
+  if (-not $apiKey -or $apiKey.Length -eq 0) { throw 'ANY.RUN API key is empty.' }
+  $null = Get-PlainSecret $C $apiKey
+  if (-not $secret -or $C.Options.RotateSecret) {
+
+    $credentialBody = @{passwordCredential = @{displayName = "$($P.Tag):password:$([Guid]::NewGuid())"
+        endDateTime = [DateTimeOffset]::UtcNow.AddMonths(6)
+      }
+    }
+    $new = Invoke-GraphPropagation $C { Add-MgApplicationPassword -ApplicationId $identity.App.Id -BodyParameter $credentialBody } PasswordCreation
+    $identity.CurrentCredential = $new
+    $secret = $new.SecretText
+    $savedId = "$($new.KeyId)"
+    $identity.NewCredential = $true
+    Write-Host "Created credential $savedId; expires $($new.EndDateTime). Previous credentials are retained." -ForegroundColor DarkGray
+  }
+  $secretValue = ConvertTo-SecureString "$secret" -AsPlainText -Force
+  $C.Secrets.Add("$secret")
+  $identity.KeyId = $savedId
+  $inventory = Get-CredentialInventory $identity
+  if ($inventory.Expired) {
+    throw "Current credential '$savedId' expired at $($inventory.ExpiresUTC). Re-run: $(Get-RotationCommand $C $P)"
+  }
+  Test-Credential $C $P $identity $secretValue
+  $parameters = Get-Parameter $C $P $storage $identity $secretValue $apiKey $settings $workflow
+  $law = Read-Arm $C "$(Get-ResourcePath $C Microsoft.OperationalInsights/workspaces $C.Workspace)?api-version=2023-09-01"
+  Assert-Managed $law $C.GroupInstance
+  if (-not $law) {
+    $null = New-AzOperationalInsightsWorkspace -ResourceGroupName $C.Options.ResourceGroup -Name $C.Workspace -Location $C.Options.Region -Sku PerGB2018 `
+      -Tag ((Get-CorporateTag $C $null) + @{ANYRUNInstaller = 'customer-v1'
+        ANYRUNInstance = $C.GroupInstance
+      })
+  } elseif (Test-RequestedTag $C $law) {
+    $null = Get-CorporateTag $C $law
+    $lawId = Get-ResourcePath $C Microsoft.OperationalInsights/workspaces $C.Workspace
+    $null = Update-AzTag -ResourceId $lawId -Operation Merge -Tag $C.Options.Tags
+  }
+  $parameters.Function.PackageUri = Publish-Package $C $P $storage
+  Deploy-Template $C $P Function $parameters.Function
+  for ($attempt = 0; $attempt -lt 18; $attempt++) {
+    try { if ($P.Handlers[0] -in @(Get-Handler $C $P)) { break } }
+    catch { if (-not (Test-HostFailure $_)) { throw } }
+    if ($attempt -eq 17) {
+      throw 'Function registration did not complete. Re-run the same command to repair this managed Function App.'
+    }
+    Start-Sleep -Seconds 10
+  }
+  Deploy-Template $C $P Logic $parameters.Logic
+  Test-Installation $C $P
+  if ($inventory.Previous.Count) {
+    Write-Host 'Previous passwords are retained. Revoke the following exact KeyIds only after verifying ALL consumers have switched:' -ForegroundColor Yellow
+    foreach ($credential in $inventory.Previous) {
+      Write-Host "KeyId: $($credential.KeyId); expires $($credential.ExpiresUTC)"
+      Write-Host $credential.RevokeCommand
+    }
+  }
+  return @{Connector = $P.Kind
+    Status = 'StructureVerified'
+    AppId = $identity.App.AppId
+    ApplicationObjectId = $identity.App.Id
+    Function = $P.Function
+    LogicApp = $P.Logic
+    CurrentCredentialKeyId = $savedId
+    CurrentCredentialExpiresUTC = $inventory.ExpiresUTC
+    PreviousCredentials = $inventory.Previous
+    Portal = "https://portal.azure.com/#resource$($C.Scope)"
+  }
+}
+
+function Invoke-CustomerInstall([hashtable]$Options, [string[]]$Explicit, [string]$Root, [scriptblock]$ShouldProcess, [bool]$Offline = $false, [string]$EntryPath = '') {
+  $c = @{Options = @{} + $Options
+    Explicit = @($Explicit)
+    Root = $Root
+    EntryPath = $EntryPath
+    ExternalGroup = $false
+    GraphOwned = $false
+    Secrets = [Collections.Generic.List[string]]::new()
+    Results = [Collections.Generic.List[object]]::new()
+    Group = $null
+    Operator = $null
+    Azure = $null
+    GroupInstance = ''
+    Scope = ''
+    Workspace = ''
+  }
+  try {
+    if (-not $c.Options.Connector) {
+      if ($c.Options.NonInteractive -and -not $Offline -and -not $c.Options.PlanOnly) {
+        throw 'NonInteractive installation requires -Connector Sandbox, Feeds, or Both.'
+      }
+      if ($Offline -or $c.Options.PlanOnly) { $c.Options.Connector = 'Both' }
+      else {
+        Write-Host 'Choose connectors: 1) Sandbox  2) TI Feeds  3) Both'
+        $choice = Read-Host 'Selection [3]'
+        $c.Options.Connector = switch ($choice) {
+          '1' { 'Sandbox' }
+          '2' { 'Feeds' }
+          '' { 'Both' }
+          '3' { 'Both' }
+          default { throw 'Choose 1, 2, or 3.' }
         }
       }
-      throw
     }
+    $kinds = if ($c.Options.Connector -eq 'Both') { @('Sandbox', 'Feeds') }
+    else { @($c.Options.Connector) }
+    $profiles = @($kinds | ForEach-Object { Get-Profile $c $_ })
+    Test-TagOption $c
+    if ($Offline -or $c.Options.PlanOnly) {
+      return @{Status = 'OfflinePlan'
+        Connector = $c.Options.Connector
+        ResourceGroup = $c.Options.ResourceGroup
+        Region = $c.Options.Region
+        Profiles = @($profiles | ForEach-Object { @{Connector = $_.Kind
+              RequiredDefenderRoles = $_.Roles
+              CredentialLifetimeMonths = 6
+            } })
+        Writes = @()
+        LiveChecksPerformed = $false
+        ArtifactDownloadsPerformed = $false
+      }
+    }
+    if ($c.Options.NonInteractive -and (-not $c.Options.TenantId -or -not $c.Options.SubscriptionId -or -not $c.Options.ApproveDefenderPermissions)) {
+      throw 'NonInteractive installation requires explicit TenantId, SubscriptionId and ApproveDefenderPermissions.'
+    }
+    Get-Artifact $c $profiles
+    Initialize-Module $c
+    Connect-Cloud $c
+    $profiles = @($kinds | ForEach-Object { Get-Profile $c $_ })
+    Test-CloudPreflight $c $profiles
+    Write-Host ("Deployment: tenant $($c.Options.TenantId); subscription $($c.Options.SubscriptionId); " +
+      "group $($c.Options.ResourceGroup); resource region $($c.Options.Region).") -ForegroundColor Cyan
+    Write-Host 'Dedicated application permissions:' -ForegroundColor Yellow
+    foreach ($p in $profiles) { Write-Host "  $($p.Kind): $($p.Roles -join ', ')" }
+    if ('Sandbox' -in $kinds) {
+      Write-Host 'Sandbox Live Response permits commands on managed devices. Review tenant policy before activation.' -ForegroundColor Yellow
+    }
+    if (-not $c.Options.ApproveDefenderPermissions -and (Read-Host 'Create these applications/resources and grant their permissions? [y/N]') -notmatch '^(y|yes)$') {
+      throw 'Permission/deployment approval was declined.'
+    }
+    if (-not (& $ShouldProcess "$($c.Options.TenantId) / $($c.Options.SubscriptionId) / $($c.Options.ResourceGroup)" "Install $($c.Options.Connector) connectors in $($c.Options.Region)")) {
+      return @{Status = 'Cancelled'
+        Writes = @()
+      }
+    }
+    Initialize-AzureResource $c
+    $c.Workspace = "anyrun-mde-law-$($c.GroupInstance.Substring(0,10))"
+    foreach ($p in $profiles) {
+      try { $c.Results.Add((Install-Connector $c $p)) }
+      catch {
+        $c.Results.Add(@{Connector = $p.Kind
+            Status = 'Failed'
+            Error = (Protect-Message $c $_.Exception.Message)
+          })
+      }
+    }
+    $status = if (@($c.Results | Where-Object Status -eq Failed).Count) { 'Failed' }
+    elseif (@($c.Results | Where-Object Status -eq NeedsConsent).Count) { 'NeedsConsent' }
+    else { 'StructureVerified' }
+    Write-Host 'Re-run the same command after a failure or manual consent. No Resume/state file is needed.' -ForegroundColor Cyan
+    if ('Sandbox' -in $kinds) {
+      Write-Host 'Sandbox requires Defender Live Response settings and the current unsigned-script policy described in README.md.' -ForegroundColor Yellow
+    }
+    Write-Host 'Monitor 6-month credential expiry. Rotation retains previous passwords; revoke exact old KeyIds only after verified cutover.' -ForegroundColor Yellow
+    return @{Status = $status
+      TenantId = $c.Options.TenantId
+      SubscriptionId = $c.Options.SubscriptionId
+      ResourceGroup = $c.Options.ResourceGroup
+      Region = $c.Options.Region
+      Results = $c.Results.ToArray()
+      RuntimeMutationTestPerformed = $false
+    }
+  } catch { throw (Protect-Message $c $_.Exception.Message) }
+  finally {
+    if ($c.GraphOwned) { $null = Disconnect-MgGraph -ErrorAction SilentlyContinue }
+    $c.Secrets.Clear()
   }
 }
-
-function Assert-FunctionName {
-  param([string]$Name)
-  if ($Name -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,58}[A-Za-z0-9])$') {
-    throw "Function App name '$Name' must contain 2-60 letters, numbers, or internal hyphens, and must start and end with a letter or number."
-  }
-}
-
-function Assert-LogicAppName {
-  param([Parameter(Mandatory = $true)][string]$Name)
-  if ($Name -notmatch '^[A-Za-z0-9._()-]{1,80}$') {
-    throw "Logic App name '$Name' must be 1-80 characters and contain only letters, digits, period, underscore, parentheses, or hyphen."
-  }
-}
-
-function Wait-FunctionRegistration {
-  param(
-    [Parameter(Mandatory = $true)][string]$FunctionAppName,
-    [Parameter(Mandatory = $true)][string]$FunctionName,
-    [int]$Attempts = 36
+# Pass the actual parameter values, including defaults, with explicitness separate.
+$options = @{}
+foreach ($name in $MyInvocation.MyCommand.Parameters.Keys) {
+  $commonParameters = @(
+    'WhatIf', 'Confirm', 'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction',
+    'ProgressAction', 'ErrorVariable', 'WarningVariable', 'InformationVariable',
+    'OutVariable', 'OutBuffer', 'PipelineVariable'
   )
-
-  $path = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$FunctionAppName/functions?api-version=2022-03-01"
-  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-    try {
-      $result = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $path)
-      $match = @($result.value | Where-Object { $_.name.Split('/')[-1] -eq $FunctionName })
-      if ($match.Count -gt 0) {
-        Write-Host "  Function '$FunctionName' is registered in '$FunctionAppName'." -ForegroundColor Green
-        return
-      }
-    } catch {
-      if ($attempt -eq $Attempts) { throw }
-    }
-    if ($attempt -lt $Attempts) {
-      Write-Host "  Waiting for function registration ($attempt/$Attempts)..." -ForegroundColor DarkGray
-      Start-Sleep -Seconds 10
-    }
-  }
-  throw "Function '$FunctionName' did not appear in '$FunctionAppName' within six minutes. Logic App deployment was not attempted."
+  if ($name -in $commonParameters) { continue }
+  $options[$name] = (Get-Variable -Name $name -Scope Local).Value
 }
-
-function Get-ResourceProvisioningState {
-  param([string]$ResourceType, [string]$Name)
-  $resource = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType $ResourceType -Name $Name -ExpandProperties -ErrorAction SilentlyContinue
-  if (-not $resource) { return "NOT FOUND" }
-  $propertyNames = @($resource.Properties.PSObject.Properties.Name)
-  if ($propertyNames -contains "provisioningState") { return $resource.Properties.provisioningState }
-  if ($propertyNames -contains "state") { return $resource.Properties.state }
-  return "Present"
-}
-
-function Get-ApiConnectionStatus {
-  param([Parameter(Mandatory = $true)][string]$Name)
-  $resource = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.Web/connections" -Name $Name -ExpandProperties -ErrorAction SilentlyContinue
-  if (-not $resource) { return "NOT FOUND" }
-  $propertyNames = @($resource.Properties.PSObject.Properties.Name)
-  if ($propertyNames -contains "overallStatus") { return $resource.Properties.overallStatus }
-  $statuses = if ($propertyNames -contains "statuses") { @($resource.Properties.statuses) } else { @() }
-  if ($statuses.Count -gt 0) { return ($statuses | ForEach-Object status) -join ", " }
-  return "UNKNOWN"
-}
-
-function Invoke-FeedsSmokeTest {
-  param([Parameter(Mandatory = $true)][string]$LogicAppName)
-  $triggeredAfter = (Get-Date).ToUniversalTime().AddSeconds(-5)
-  $path = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Logic/workflows/$LogicAppName/triggers/Recurrence/run?api-version=2016-06-01"
-  $response = Invoke-AzRestMethod -Method POST -Path $path -Payload "{}"
-  if ([int]$response.StatusCode -notin @(200, 202)) {
-    throw "Feeds Logic App smoke test returned HTTP $($response.StatusCode)."
-  }
-  Write-Host "  Feeds Logic App test run was accepted (HTTP $($response.StatusCode)); waiting for completion..." -ForegroundColor DarkGray
-
-  $runsPath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Logic/workflows/$LogicAppName/runs?api-version=2016-06-01&`$top=10"
-  for ($attempt = 1; $attempt -le 36; $attempt++) {
-    $runs = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $runsPath)
-    $run = @($runs.value | Where-Object {
-      [DateTime]$_.properties.startTime -ge $triggeredAfter
-    } | Sort-Object { [DateTime]$_.properties.startTime } -Descending) | Select-Object -First 1
-
-    if ($run) {
-      $status = "$($run.properties.status)"
-      if ($status -eq "Succeeded") {
-        Write-Host "  Feeds Logic App test run '$($run.name)' succeeded." -ForegroundColor Green
-        return
-      }
-      if ($status -in @("Failed", "Cancelled", "TimedOut", "Aborted", "Skipped")) {
-        $errorText = if ($run.properties.error) { $run.properties.error | ConvertTo-Json -Depth 10 -Compress } else { "no error details returned" }
-        throw "Feeds Logic App test run '$($run.name)' finished with status '$status': $errorText"
-      }
-    }
-
-    if ($attempt -lt 36) {
-      Write-Host "  Feeds test run is still pending ($attempt/36)..." -ForegroundColor DarkGray
-      Start-Sleep -Seconds 10
-    }
-  }
-  throw "Feeds Logic App test run did not finish within six minutes."
-}
-
+$entryCmdlet = $PSCmdlet
+$approval = { param($target, $action) $entryCmdlet.ShouldProcess($target, $action) }.GetNewClosure()
+$work = $null
+$workCreated = $false
 try {
-Write-Banner "ANY.RUN Microsoft Defender for Endpoint connector deployment"
-
-$deploySandbox = $Connector -in @("Sandbox", "Both")
-$deployFeeds = $Connector -in @("Feeds", "Both")
-if ($RotateClientSecret -and $SkipFunctionApp) {
-  throw "-RotateClientSecret cannot be combined with -SkipFunctionApp because the Function App must receive the new secret."
-}
-
-Write-Phase "0" "Pre-flight"
-Write-Step "Loading required PowerShell modules..."
-Ensure-Module "Az.Accounts" -MinimumVersion "5.5.3" -RequiredCommands @(
-  "Connect-AzAccount", "Get-AzAccessToken", "Get-AzContext", "Get-AzSubscription", "Invoke-AzRestMethod", "Set-AzContext"
-)
-Ensure-Module "Az.Resources" -MinimumVersion "10.2.1" -RequiredCommands @(
-  "Get-AzResource", "Get-AzResourceGroup", "Get-AzResourceGroupDeploymentOperation", "Get-AzResourceProvider",
-  "Get-AzRoleAssignment", "New-AzResourceGroup", "New-AzResourceGroupDeployment", "Register-AzResourceProvider",
-  "Remove-AzResource", "Remove-AzRoleAssignment", "Test-AzResourceGroupDeployment"
-)
-Ensure-Module "Az.Storage" -MinimumVersion "9.7.2" -RequiredCommands @(
-  "Get-AzStorageAccount", "Get-AzStorageAccountKey", "Get-AzStorageAccountNameAvailability", "New-AzStorageAccount"
-)
-Ensure-Module "Az.OperationalInsights" -MinimumVersion "3.4.1" -RequiredCommands @(
-  "Get-AzOperationalInsightsWorkspace", "New-AzOperationalInsightsWorkspace"
-)
-Ensure-Module "Microsoft.Graph.Authentication" -MinimumVersion "2.40.0" -RequiredCommands @(
-  "Connect-MgGraph", "Disconnect-MgGraph", "Get-MgContext"
-)
-Ensure-Module "Microsoft.Graph.Applications" -MinimumVersion "2.40.0" -RequiredCommands @(
-  "Add-MgApplicationPassword", "Get-MgApplication", "Get-MgServicePrincipal", "Get-MgServicePrincipalAppRoleAssignment",
-  "New-MgApplication", "New-MgServicePrincipal", "New-MgServicePrincipalAppRoleAssignment", "Remove-MgApplicationPassword",
-  "Remove-MgServicePrincipalAppRoleAssignment", "Update-MgApplication"
-)
-
-$script:ResolvedRepositoryRef = Resolve-RepositoryCommit -RepositoryName $Repository -Ref $RepositoryRef
-$encodedRoot = "https://raw.githubusercontent.com/$Repository/$($script:ResolvedRepositoryRef)/Microsoft%20Defender%20for%20Endpoint"
-$RepositoryRef = $script:ResolvedRepositoryRef
-if (-not $SandboxFunctionTemplateUri) { $SandboxFunctionTemplateUri = "$encodedRoot/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.json" }
-if (-not $SandboxLogicTemplateUri)    { $SandboxLogicTemplateUri    = "$encodedRoot/ANYRUN-Sandbox-MDE/Logic%20App/ANYRUN-Sandbox-MDE-LA.json" }
-if (-not $FeedsFunctionTemplateUri)   { $FeedsFunctionTemplateUri   = "$encodedRoot/ANYRUN-TI-Feeds-MDE/Function%20App/ANYRUN-Feeds-MDE-FA.json" }
-if (-not $FeedsLogicTemplateUri)      { $FeedsLogicTemplateUri      = "$encodedRoot/ANYRUN-TI-Feeds-MDE/Logic%20App/ANYRUN-Feeds-MDE-LA.json" }
-
-if (-not $AllowUnverifiedArtifacts) {
-  foreach ($templateUri in @($SandboxFunctionTemplateUri, $SandboxLogicTemplateUri, $FeedsFunctionTemplateUri, $FeedsLogicTemplateUri)) {
-    if ($templateUri -and -not $templateUri.StartsWith($encodedRoot, [StringComparison]::OrdinalIgnoreCase)) {
-      throw "Custom template URI '$templateUri' is outside the resolved repository commit. Use a local template file or -AllowUnverifiedArtifacts only for reviewed development artifacts."
-    }
+  if (-not $PlanOnly -and -not $WhatIfPreference) {
+    $work = Join-Path ([IO.Path]::GetTempPath()) "anyrun-mde-$([Guid]::NewGuid().ToString('N'))"
+    if (Test-Path -LiteralPath $work) { throw 'Temporary workspace already exists.' }
+    if ($IsWindows) { $null = [IO.Directory]::CreateDirectory($work) }
+    else { $null = [IO.Directory]::CreateDirectory($work, [IO.UnixFileMode]448) }
+    $workCreated = $true
   }
-}
-
-$azureContext = Connect-AzureSmart -RequestedTenantId $TenantId -RequestedSubscriptionId $SubscriptionId
-$TenantId = $azureContext.Tenant.Id
-$SubscriptionId = $azureContext.Subscription.Id
-Connect-GraphSmart -RequestedTenantId $TenantId
-
-Write-Host ""
-Write-Host "  Tenant       : $TenantId" -ForegroundColor White
-Write-Host "  Subscription : $($azureContext.Subscription.Name) ($SubscriptionId)" -ForegroundColor White
-Write-Host "  Connector    : $Connector" -ForegroundColor White
-if (-not (Confirm-Action "  Continue with this tenant and subscription?" $true)) { throw "Deployment cancelled." }
-
-if (-not $ResourceGroup) {
-  $ResourceGroup = Read-Text -Prompt "Resource group name" -Default "rg-anyrun-mde"
-}
-if ($ResourceGroup -notmatch '^[^<>%&:\\?/#]{1,90}(?<!\.)$') {
-  throw "Resource group name '$ResourceGroup' contains invalid characters or ends with a period."
-}
-$existingResourceGroup = Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue
-if ($existingResourceGroup) {
-  $Region = $existingResourceGroup.Location
-} elseif (-not $regionWasPassed) {
-  if ($NonInteractive) {
-    throw "A new resource group requires an explicit -Region in non-interactive mode."
-  }
-  $Region = Read-Text -Prompt "Azure region" -Default $Region
-}
-Write-Step "Checking Azure providers and Flex Consumption support before creating the resource group..."
-foreach ($providerNamespace in @("Microsoft.Web", "Microsoft.Storage", "Microsoft.Insights", "Microsoft.OperationalInsights", "Microsoft.Logic")) {
-  Ensure-ResourceProvider -ProviderNamespace $providerNamespace
-}
-Assert-FlexConsumptionRegion -Location $Region
-$resourceGroupObject = Ensure-ResourceGroup -Name $ResourceGroup -Location $Region
-$Region = $resourceGroupObject.Location
-
-$stableSuffix = Get-StableSuffix -InputText "$TenantId|$SubscriptionId|$ResourceGroup" -Length 8
-if (-not $LogAnalyticsWorkspaceName) { $LogAnalyticsWorkspaceName = "anyrun-mde-law-$stableSuffix" }
-if ($deploySandbox) {
-  if (-not $SandboxFunctionName)       { $SandboxFunctionName = "anyrun-sandbox-mde-$stableSuffix" }
-  if (-not $SandboxLogicAppName)       { $SandboxLogicAppName = "ANYRUN-Sandbox-MDE-LA-$stableSuffix" }
-  if (-not $SandboxStorageAccountName) { $SandboxStorageAccountName = "arsb$stableSuffix" }
-  Assert-FunctionName -Name $SandboxFunctionName
-  Assert-LogicAppName -Name $SandboxLogicAppName
-}
-if ($deployFeeds) {
-  if (-not $FeedsFunctionName)       { $FeedsFunctionName = "anyrun-feeds-mde-$stableSuffix" }
-  if (-not $FeedsLogicAppName)       { $FeedsLogicAppName = "ANYRUN-Feeds-MDE-LA-$stableSuffix" }
-  if (-not $FeedsStorageAccountName) { $FeedsStorageAccountName = "arfd$stableSuffix" }
-  Assert-FunctionName -Name $FeedsFunctionName
-  Assert-LogicAppName -Name $FeedsLogicAppName
-}
-
-Write-Step "Checking permissions and global names before changing Entra ID..."
-$resourceGroupScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup"
-if (-not (Test-EffectiveRoleAssignmentPermission -Scope $resourceGroupScope)) {
-  throw "The signed-in account does not have Microsoft.Authorization/roleAssignments/write at '$resourceGroupScope'. Use Owner or User Access Administrator plus Contributor."
-}
-Show-ResourceGroupWriteAccess -Scope $resourceGroupScope
-if ($deploySandbox) { Assert-FunctionAppNameAvailable -Name $SandboxFunctionName }
-if ($deployFeeds)   { Assert-FunctionAppNameAvailable -Name $FeedsFunctionName }
-if ($deploySandbox) { Assert-StorageAccountUsable -Name $SandboxStorageAccountName.ToLowerInvariant() }
-if ($deployFeeds)   { Assert-StorageAccountUsable -Name $FeedsStorageAccountName.ToLowerInvariant() }
-
-Write-Phase "1" "Azure resources and ARM validation"
-$workspace = Ensure-LogAnalyticsWorkspace -ResourceGroupName $ResourceGroup -Name $LogAnalyticsWorkspaceName -Location $Region
-Write-Host "  Workspace: $($workspace.Name)" -ForegroundColor Green
-
-# On re-runs, recover the existing runtime configuration instead of forcing the
-# operator to retain secrets or creating another credential every time.
-$sandboxIdentityRecoveredFromFunction = $false
-$feedsIdentityRecoveredFromFunction = $false
-if ($deploySandbox) {
-  $sandboxExistingConfiguration = Get-ExistingFunctionConfiguration -FunctionAppName $SandboxFunctionName
-  if ($SkipFunctionApp -and -not $sandboxExistingConfiguration) {
-    throw "-SkipFunctionApp was specified, but Function App '$SandboxFunctionName' does not exist."
-  }
-  if ($sandboxExistingConfiguration) {
-    $settings = $sandboxExistingConfiguration.properties
-    $existingClientId = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientID"
-    $existingClientSecret = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientSecret"
-    $existingApiKey = Get-ObjectPropertyValue -InputObject $settings -Name "ANYRUN_API_KEY"
-    if ($existingClientId) { $existingClientId = Assert-GuidValue -Value "$existingClientId" -Name "Sandbox Function App AzureClientID" }
-    if (-not $SandboxAppId) { $SandboxAppId = $existingClientId }
-    elseif ($existingClientId -and $existingClientId -ne $SandboxAppId) {
-      throw "SandboxAppId '$SandboxAppId' does not match the existing Function App configuration."
-    }
-    if ($existingClientId -and -not $sandboxAppIdWasPassed) { $sandboxIdentityRecoveredFromFunction = $true }
-    if (-not $RotateClientSecret -and -not $SandboxClientSecret -and $existingClientSecret) {
-      $SandboxClientSecret = ConvertTo-SecureValue -Value $existingClientSecret
-    }
-    if (-not $SandboxApiKey -and $existingApiKey) {
-      $sandboxKey = "$existingApiKey" -replace '^API-KEY\s+', ''
-      $SandboxApiKey = ConvertTo-SecureValue -Value $sandboxKey
-    }
-    Write-Host "  Recovered Sandbox credentials from the existing Function App settings." -ForegroundColor Green
-  }
-}
-if ($deployFeeds) {
-  $feedsExistingConfiguration = Get-ExistingFunctionConfiguration -FunctionAppName $FeedsFunctionName
-  if ($SkipFunctionApp -and -not $feedsExistingConfiguration) {
-    throw "-SkipFunctionApp was specified, but Function App '$FeedsFunctionName' does not exist."
-  }
-  if ($feedsExistingConfiguration) {
-    $settings = $feedsExistingConfiguration.properties
-    $existingClientId = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientID"
-    $existingClientSecret = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientSecret"
-    $existingApiKey = Get-ObjectPropertyValue -InputObject $settings -Name "ANYRUN_api_key"
-    if ($existingClientId) { $existingClientId = Assert-GuidValue -Value "$existingClientId" -Name "TI Feeds Function App AzureClientID" }
-    if (-not $FeedsAppId) { $FeedsAppId = $existingClientId }
-    elseif ($existingClientId -and $existingClientId -ne $FeedsAppId) {
-      throw "FeedsAppId '$FeedsAppId' does not match the existing Function App configuration."
-    }
-    if ($existingClientId -and -not $feedsAppIdWasPassed) { $feedsIdentityRecoveredFromFunction = $true }
-    if (-not $RotateClientSecret -and -not $FeedsClientSecret -and $existingClientSecret) {
-      $FeedsClientSecret = ConvertTo-SecureValue -Value $existingClientSecret
-    }
-    if (-not $FeedsApiKey -and $existingApiKey) {
-      $FeedsApiKey = ConvertTo-SecureValue -Value $existingApiKey
-    }
-    Write-Host "  Recovered TI Feeds credentials from the existing Function App settings." -ForegroundColor Green
-  }
-}
-
-$effectiveSandboxFunctionTemplate = $SandboxFunctionTemplateFile
-$removeSandboxTemplate = $false
-$effectiveFeedsFunctionTemplate = $FeedsFunctionTemplateFile
-$removeFeedsTemplate = $false
-$effectiveSandboxLogicTemplate = $SandboxLogicTemplateFile
-$effectiveFeedsLogicTemplate = $FeedsLogicTemplateFile
-$placeholderSecret = ConvertTo-SecureValue -Value "preflight-placeholder"
-if (-not $SkipFunctionApp) {
-  if ($deploySandbox) {
-    if (-not $effectiveSandboxFunctionTemplate) {
-      $effectiveSandboxFunctionTemplate = New-PreparedFunctionTemplate -TemplateUri $SandboxFunctionTemplateUri `
-        -ConnectorType Sandbox -ExpectedTemplateHash $SandboxFunctionTemplateSha256
-      $removeSandboxTemplate = $true
-    }
-    Test-ArmDeployment -Label "Sandbox Function App" -TemplateUri $SandboxFunctionTemplateUri `
-      -TemplateFile $effectiveSandboxFunctionTemplate -TemplateParameters @{
-        functionAppName = $SandboxFunctionName; AzureTenantID = $TenantId
-        AzureClientID = "00000000-0000-0000-0000-000000000000"; AzureClientSecret = $placeholderSecret
-        AzureStorageAccountName = $SandboxStorageAccountName; AzureStorageAccountKey = $placeholderSecret
-        AzureStorageConnectionString = $placeholderSecret; AzureBlobContainerName = $SandboxBlobContainerName
-        ANYRUN_API_KEY = $placeholderSecret; DefenderIndicatorAction = $DefenderIndicatorAction
-        DefenderIndicatorGenerateAlert = $DefenderIndicatorGenerateAlert
-        ConfigureEvidenceLifecyclePolicy = $false
-        LogAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
-      }
-  }
-  if ($deployFeeds) {
-    if (-not $effectiveFeedsFunctionTemplate) {
-      $effectiveFeedsFunctionTemplate = New-PreparedFunctionTemplate -TemplateUri $FeedsFunctionTemplateUri `
-        -ConnectorType Feeds -ExpectedTemplateHash $FeedsFunctionTemplateSha256
-      $removeFeedsTemplate = $true
-    }
-    Test-ArmDeployment -Label "TI Feeds Function App" -TemplateUri $FeedsFunctionTemplateUri `
-      -TemplateFile $effectiveFeedsFunctionTemplate -TemplateParameters @{
-        functionAppName = $FeedsFunctionName; anyrunApiKey = $placeholderSecret
-        AzureClientID = "00000000-0000-0000-0000-000000000000"; AzureClientSecret = $placeholderSecret
-        AzureTenantID = $TenantId; AzureStorageAccountName = $FeedsStorageAccountName
-        AzureStorageConnectionString = $placeholderSecret; LogAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
-        DefenderIndicatorAction = $DefenderIndicatorAction
-      }
-  }
-}
-
-if (-not $SkipLogicApp) {
-  if ($deploySandbox -and -not $effectiveSandboxLogicTemplate) {
-    $effectiveSandboxLogicTemplate = New-RegionalLogicTemplate -TemplateUri $SandboxLogicTemplateUri `
-      -ConnectorType Sandbox -ExpectedTemplateHash $SandboxLogicTemplateSha256
-  }
-  if ($deployFeeds -and -not $effectiveFeedsLogicTemplate) {
-    $effectiveFeedsLogicTemplate = New-RegionalLogicTemplate -TemplateUri $FeedsLogicTemplateUri `
-      -ConnectorType Feeds -ExpectedTemplateHash $FeedsLogicTemplateSha256
-  }
-  if ($deploySandbox) {
-    Test-ArmDeployment -Label "Sandbox Logic App" -TemplateUri $SandboxLogicTemplateUri `
-      -TemplateFile $effectiveSandboxLogicTemplate -TemplateParameters @{
-        logicAppName = $SandboxLogicAppName; azureTenantId = $TenantId
-        azureClientId = "00000000-0000-0000-0000-000000000000"; azureClientSecret = $placeholderSecret
-        functionAppName = $SandboxFunctionName; analysisPrivacyType = $SandboxAnalysisPrivacyType
-      }
-  }
-  if ($deployFeeds) {
-    Test-ArmDeployment -Label "TI Feeds Logic App" -TemplateUri $FeedsLogicTemplateUri `
-      -TemplateFile $effectiveFeedsLogicTemplate -TemplateParameters @{
-        logicAppName = $FeedsLogicAppName; intervalRecurrence = $FeedsIntervalHours
-        feedFetchDepth = $FeedsFetchDepthDays; minimum_confidence_threshold = $FeedsMinimumConfidence
-        functionAppName = $FeedsFunctionName
-      }
-  }
-}
-
-$sandboxStorage = $null
-$feedsStorage = $null
-if ($deploySandbox) {
-  $sandboxStorage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $SandboxStorageAccountName.ToLowerInvariant() -Location $Region
-  if (-not $SandboxApiKey) { $SandboxApiKey = Read-RequiredSecret "  ANY.RUN Sandbox API key (without the 'API-KEY ' prefix)" }
-}
-if ($deployFeeds) {
-  $feedsStorage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $FeedsStorageAccountName.ToLowerInvariant() -Location $Region
-  if (-not $FeedsApiKey) { $FeedsApiKey = Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)" }
-}
-
-Write-Phase "2" "App Registration and API permissions"
-$sandboxIdentity = $null
-$feedsIdentity = $null
-
-if ($deploySandbox) {
-  $sandboxIdentity = Ensure-ConnectorIdentity -Label "Sandbox" -DisplayName $SandboxAppDisplayName `
-    -ExistingAppId $SandboxAppId -ExistingClientSecret $SandboxClientSecret -RequiredRoleValues $sandboxRoles `
-    -TrustedExistingFunctionBinding $sandboxIdentityRecoveredFromFunction -RotateSecret:$RotateClientSecret
-}
-if ($deployFeeds) {
-  $feedsIdentity = Ensure-ConnectorIdentity -Label "TI Feeds" -DisplayName $FeedsAppDisplayName `
-    -ExistingAppId $FeedsAppId -ExistingClientSecret $FeedsClientSecret -RequiredRoleValues $feedsRoles `
-    -TrustedExistingFunctionBinding $feedsIdentityRecoveredFromFunction -RotateSecret:$RotateClientSecret
-}
-
-Write-Phase "3" "Function Apps"
-$sandboxFunctionDeployed = $false
-$feedsFunctionDeployed = $false
-if ($deploySandbox -and -not $SkipFunctionApp) {
-  Remove-LegacyStorageRoleAssignment -StorageAccountName $sandboxStorage.Name `
-    -FunctionAppName $SandboxFunctionName -ConnectorType Sandbox
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $sandboxStorage.Name `
-    -AllowRoleCleanup (-not $sandboxStorageNameWasPassed)
-  $sandboxFunctionParameters = @{
-    functionAppName              = $SandboxFunctionName
-    AzureTenantID                = $TenantId
-    AzureClientID                = $sandboxIdentity.ClientId
-    AzureClientSecret            = $sandboxIdentity.ClientSecret
-    AzureStorageAccountName      = $sandboxStorage.Name
-    AzureStorageAccountKey       = $sandboxStorage.Key
-    AzureStorageConnectionString = $sandboxStorage.ConnectionString
-    AzureBlobContainerName       = $SandboxBlobContainerName
-    ANYRUN_API_KEY               = $SandboxApiKey
-    DefenderIndicatorAction      = $DefenderIndicatorAction
-    DefenderIndicatorGenerateAlert = $DefenderIndicatorGenerateAlert
-    ConfigureEvidenceLifecyclePolicy = [bool]$sandboxStorage.Created
-    LogAnalyticsWorkspaceName    = $LogAnalyticsWorkspaceName
-  }
-  try {
-    Invoke-ArmDeployment -Label "Sandbox Function App" -TemplateUri $SandboxFunctionTemplateUri `
-      -TemplateFile $effectiveSandboxFunctionTemplate -TemplateParameters $sandboxFunctionParameters | Out-Null
-    $sandboxFunctionDeployed = $true
-  } finally {
-    if ($removeSandboxTemplate) { Remove-Item -LiteralPath $effectiveSandboxFunctionTemplate -Force -ErrorAction SilentlyContinue }
-  }
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $sandboxStorage.Name `
-    -AllowRoleCleanup (-not $sandboxStorageNameWasPassed)
-}
-
-if ($deployFeeds -and -not $SkipFunctionApp) {
-  Remove-LegacyStorageRoleAssignment -StorageAccountName $feedsStorage.Name `
-    -FunctionAppName $FeedsFunctionName -ConnectorType Feeds
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $feedsStorage.Name `
-    -AllowRoleCleanup (-not $feedsStorageNameWasPassed)
-  $feedsFunctionParameters = @{
-    functionAppName              = $FeedsFunctionName
-    anyrunApiKey                 = $FeedsApiKey
-    AzureClientID                = $feedsIdentity.ClientId
-    AzureClientSecret            = $feedsIdentity.ClientSecret
-    AzureTenantID                = $TenantId
-    AzureStorageAccountName      = $feedsStorage.Name
-    AzureStorageConnectionString = $feedsStorage.ConnectionString
-    LogAnalyticsWorkspaceName    = $LogAnalyticsWorkspaceName
-    DefenderIndicatorAction      = $DefenderIndicatorAction
-  }
-  try {
-    Invoke-ArmDeployment -Label "TI Feeds Function App" -TemplateUri $FeedsFunctionTemplateUri `
-      -TemplateFile $effectiveFeedsFunctionTemplate -TemplateParameters $feedsFunctionParameters | Out-Null
-    $feedsFunctionDeployed = $true
-  } finally {
-    if ($removeFeedsTemplate) { Remove-Item -LiteralPath $effectiveFeedsFunctionTemplate -Force -ErrorAction SilentlyContinue }
-  }
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $feedsStorage.Name `
-    -AllowRoleCleanup (-not $feedsStorageNameWasPassed)
-}
-if ($SkipFunctionApp) {
-  Write-Host "  Function App deployment skipped; existing apps will be verified before Logic App deployment." -ForegroundColor Yellow
-}
-
-Write-Phase "4" "Logic Apps"
-$sandboxLogicDeployed = $false
-$feedsLogicDeployed = $false
-if ($deploySandbox -and -not $SkipLogicApp -and -not $sandboxIdentity.ConsentDeferred) {
-  Wait-FunctionRegistration -FunctionAppName $SandboxFunctionName -FunctionName "ANYRUN-Sandbox-MDE-FA"
-  $sandboxLogicParameters = @{
-    logicAppName      = $SandboxLogicAppName
-    azureTenantId     = $TenantId
-    azureClientId     = $sandboxIdentity.ClientId
-    azureClientSecret = $sandboxIdentity.ClientSecret
-    functionAppName   = $SandboxFunctionName
-    analysisPrivacyType = $SandboxAnalysisPrivacyType
-  }
-  Invoke-ArmDeployment -Label "Sandbox Logic App" -TemplateUri $SandboxLogicTemplateUri `
-    -TemplateFile $effectiveSandboxLogicTemplate -TemplateParameters $sandboxLogicParameters | Out-Null
-  $sandboxLogicDeployed = $true
-} elseif ($deploySandbox -and $sandboxIdentity.ConsentDeferred) {
-  Write-Host "  Sandbox Logic App skipped because Defender admin consent is not complete." -ForegroundColor Yellow
-}
-
-if ($deployFeeds -and -not $SkipLogicApp -and -not $feedsIdentity.ConsentDeferred) {
-  Wait-FunctionRegistration -FunctionAppName $FeedsFunctionName -FunctionName "ANYRUN-Feeds-MDE-FA"
-  $feedsLogicParameters = @{
-    logicAppName               = $FeedsLogicAppName
-    intervalRecurrence         = $FeedsIntervalHours
-    feedFetchDepth             = $FeedsFetchDepthDays
-    minimum_confidence_threshold = $FeedsMinimumConfidence
-    functionAppName            = $FeedsFunctionName
-  }
-  Invoke-ArmDeployment -Label "TI Feeds Logic App" -TemplateUri $FeedsLogicTemplateUri `
-    -TemplateFile $effectiveFeedsLogicTemplate -TemplateParameters $feedsLogicParameters | Out-Null
-  $feedsLogicDeployed = $true
-} elseif ($deployFeeds -and $feedsIdentity.ConsentDeferred) {
-  Write-Host "  TI Feeds Logic App skipped because Defender admin consent is not complete." -ForegroundColor Yellow
-}
-if ($SkipLogicApp) {
-  Write-Host "  Logic App deployment was skipped by -SkipLogicApp." -ForegroundColor Yellow
-}
-
-Write-Phase "5" "Verification"
-$verificationFailures = [System.Collections.Generic.List[string]]::new()
-if ($deploySandbox) {
-  try { Wait-FunctionRegistration -FunctionAppName $SandboxFunctionName -FunctionName "ANYRUN-Sandbox-MDE-FA" -Attempts 1 }
-  catch { $verificationFailures.Add($_.Exception.Message) }
-  $sandboxFunctionState = Get-ResourceProvisioningState -ResourceType "Microsoft.Web/sites" -Name $SandboxFunctionName
-  Write-Host "  Sandbox Function App : $sandboxFunctionState" -ForegroundColor White
-  if ($sandboxFunctionState -notin @("Running", "Succeeded")) { $verificationFailures.Add("Sandbox Function App state is '$sandboxFunctionState'.") }
-  if ($sandboxLogicDeployed -or (-not $SkipLogicApp -and -not $sandboxIdentity.ConsentDeferred)) {
-    $sandboxLogicState = Get-ResourceProvisioningState -ResourceType "Microsoft.Logic/workflows" -Name $SandboxLogicAppName
-    $sandboxConnectionState = Get-ApiConnectionStatus -Name "wdatp--anyrun-app"
-    Write-Host "  Sandbox Logic App    : $sandboxLogicState" -ForegroundColor White
-    Write-Host "  WDATP connection     : $sandboxConnectionState" -ForegroundColor White
-    if ($sandboxLogicState -ne "Succeeded") { $verificationFailures.Add("Sandbox Logic App state is '$sandboxLogicState'.") }
-    if ($sandboxConnectionState -ne "Connected") { $verificationFailures.Add("WDATP API connection state is '$sandboxConnectionState'.") }
-  }
-}
-if ($deployFeeds) {
-  try { Wait-FunctionRegistration -FunctionAppName $FeedsFunctionName -FunctionName "ANYRUN-Feeds-MDE-FA" -Attempts 1 }
-  catch { $verificationFailures.Add($_.Exception.Message) }
-  $feedsFunctionState = Get-ResourceProvisioningState -ResourceType "Microsoft.Web/sites" -Name $FeedsFunctionName
-  Write-Host "  Feeds Function App   : $feedsFunctionState" -ForegroundColor White
-  if ($feedsFunctionState -notin @("Running", "Succeeded")) { $verificationFailures.Add("Feeds Function App state is '$feedsFunctionState'.") }
-  if ($feedsLogicDeployed -or (-not $SkipLogicApp -and -not $feedsIdentity.ConsentDeferred)) {
-    $feedsLogicState = Get-ResourceProvisioningState -ResourceType "Microsoft.Logic/workflows" -Name $FeedsLogicAppName
-    Write-Host "  Feeds Logic App      : $feedsLogicState" -ForegroundColor White
-    if ($feedsLogicState -ne "Succeeded") { $verificationFailures.Add("Feeds Logic App state is '$feedsLogicState'.") }
-    if ($TestFeedsInvocation -and $feedsLogicState -eq "Succeeded") {
-      try { Invoke-FeedsSmokeTest -LogicAppName $FeedsLogicAppName }
-      catch { $verificationFailures.Add("Feeds Logic App smoke test failed: $($_.Exception.Message)") }
-    }
-  }
-}
-
-if ($verificationFailures.Count -eq 0) {
-  if (-not $ForceGraphDeviceCode -and (($deploySandbox -and $sandboxIdentity.NewCredentialKeyId) -or ($deployFeeds -and $feedsIdentity.NewCredentialKeyId))) {
-    Connect-GraphSmart -RequestedTenantId $TenantId
-  }
-  if ($deploySandbox -and $sandboxFunctionDeployed -and $sandboxLogicDeployed -and -not $sandboxIdentity.ConsentDeferred -and $sandboxIdentity.NewCredentialKeyId) {
-    Remove-OldConnectorSecrets -ApplicationObjectId $sandboxIdentity.ApplicationObjectId `
-      -CurrentKeyId $sandboxIdentity.NewCredentialKeyId -Label "Sandbox"
-  }
-  if ($deployFeeds -and $feedsFunctionDeployed -and $feedsLogicDeployed -and -not $feedsIdentity.ConsentDeferred -and $feedsIdentity.NewCredentialKeyId) {
-    Remove-OldConnectorSecrets -ApplicationObjectId $feedsIdentity.ApplicationObjectId `
-      -CurrentKeyId $feedsIdentity.NewCredentialKeyId -Label "TI Feeds"
-  }
-}
-
-Write-Banner "Deployment summary"
-Write-Host "  Resource group : $ResourceGroup" -ForegroundColor White
-Write-Host "  Region         : $Region" -ForegroundColor White
-Write-Host "  Log Analytics  : $LogAnalyticsWorkspaceName" -ForegroundColor White
-if ($deploySandbox) {
-  Write-Host ""
-  Write-Host "  Sandbox App Registration : $($sandboxIdentity.DisplayName) ($($sandboxIdentity.ClientId))" -ForegroundColor White
-  Write-Host "  Sandbox Function App     : $SandboxFunctionName" -ForegroundColor White
-  Write-Host "  Sandbox Logic App        : $SandboxLogicAppName" -ForegroundColor White
-  Write-Host "  Sandbox Storage          : $($sandboxStorage.Name)" -ForegroundColor White
-}
-if ($deployFeeds) {
-  Write-Host ""
-  Write-Host "  Feeds App Registration   : $($feedsIdentity.DisplayName) ($($feedsIdentity.ClientId))" -ForegroundColor White
-  Write-Host "  Feeds Function App       : $FeedsFunctionName" -ForegroundColor White
-  Write-Host "  Feeds Logic App          : $FeedsLogicAppName" -ForegroundColor White
-  Write-Host "  Feeds Storage            : $($feedsStorage.Name)" -ForegroundColor White
-}
-
-if ($script:DeferredConsentUrls.Count -gt 0) {
-  Write-Host ""
-  Write-Host "  ACTION REQUIRED - grant admin consent:" -ForegroundColor Yellow
-  $script:DeferredConsentUrls | Sort-Object -Unique | ForEach-Object { Write-Host "    $_" -ForegroundColor Cyan }
-  Write-Host "  After consent is granted, resume without redeploying the Function App:" -ForegroundColor Yellow
-  $continuationArguments = [System.Collections.Generic.List[string]]::new()
-  $continuationArguments.Add("-Connector $(ConvertTo-PowerShellLiteral $Connector)")
-  $continuationArguments.Add("-TenantId $(ConvertTo-PowerShellLiteral $TenantId)")
-  $continuationArguments.Add("-SubscriptionId $(ConvertTo-PowerShellLiteral $SubscriptionId)")
-  $continuationArguments.Add("-ResourceGroup $(ConvertTo-PowerShellLiteral $ResourceGroup)")
-  $continuationArguments.Add("-Region $(ConvertTo-PowerShellLiteral $Region)")
-  $continuationArguments.Add("-LogAnalyticsWorkspaceName $(ConvertTo-PowerShellLiteral $LogAnalyticsWorkspaceName)")
-  $continuationArguments.Add("-Repository $(ConvertTo-PowerShellLiteral $Repository)")
-  $continuationArguments.Add("-RepositoryRef $(ConvertTo-PowerShellLiteral $RepositoryRef)")
-  if ($deploySandbox) {
-    $continuationArguments.Add("-SandboxFunctionName $(ConvertTo-PowerShellLiteral $SandboxFunctionName)")
-    $continuationArguments.Add("-SandboxLogicAppName $(ConvertTo-PowerShellLiteral $SandboxLogicAppName)")
-    $continuationArguments.Add("-SandboxStorageAccountName $(ConvertTo-PowerShellLiteral $SandboxStorageAccountName)")
-    $continuationArguments.Add("-SandboxAnalysisPrivacyType $(ConvertTo-PowerShellLiteral $SandboxAnalysisPrivacyType)")
-  }
-  if ($deployFeeds) {
-    $continuationArguments.Add("-FeedsFunctionName $(ConvertTo-PowerShellLiteral $FeedsFunctionName)")
-    $continuationArguments.Add("-FeedsLogicAppName $(ConvertTo-PowerShellLiteral $FeedsLogicAppName)")
-    $continuationArguments.Add("-FeedsStorageAccountName $(ConvertTo-PowerShellLiteral $FeedsStorageAccountName)")
-  }
-  $continuationArguments.Add("-SkipFunctionApp")
-  Write-Host "    ./Deploy-ANYRUNMDEConnector.ps1 $($continuationArguments -join ' ')" -ForegroundColor Cyan
-}
-
-if ($deploySandbox) {
-  Write-Host ""
-  Write-Host "  ACTION REQUIRED - Defender for Endpoint settings:" -ForegroundColor Yellow
-  Write-Host "    1. Open https://security.microsoft.com" -ForegroundColor White
-  Write-Host "    2. Go to Settings > Endpoints > Advanced features." -ForegroundColor White
-  Write-Host "    3. Enable Live Response and Live Response for Servers." -ForegroundColor White
-  Write-Host "    4. Enable Live Response unsigned script execution after reviewing the risk." -ForegroundColor White
-  Write-Host "    5. Review the Defender Antivirus quarantine policy. The installer does not change it." -ForegroundColor White
-}
-
-Write-Host ""
-Write-Host "  CREDENTIAL ROTATION REQUIRED:" -ForegroundColor Yellow
-Write-Host "    Client secrets expire after $SecretLifetimeMonths month(s). Configure an Entra expiry alert" -ForegroundColor White
-Write-Host "    and rerun this installer with -RotateClientSecret before expiration." -ForegroundColor White
-
-Write-Host ""
-if ($verificationFailures.Count -gt 0) {
-  Write-Host "Deployment verification failed:" -ForegroundColor Red
-  $verificationFailures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-  throw "Deployment completed with verification failures. Review the messages above before using the connector."
-}
-if ($script:DeferredConsentUrls.Count -gt 0) {
-  Write-Host "Function deployment finished, but connector activation is incomplete until admin consent and the Logic App continuation run succeed." -ForegroundColor Yellow
-} else {
-  Write-Host "Deployment finished. API keys and client secrets were not printed." -ForegroundColor Green
-}
+  $result = Invoke-CustomerInstall -Options $options -Explicit @($PSBoundParameters.Keys) -Root $work -EntryPath $PSCommandPath `
+    -ShouldProcess $approval -Offline ([bool]$WhatIfPreference)
 } finally {
-  foreach ($temporaryFile in $script:TemporaryFiles) {
-    Remove-Item -LiteralPath $temporaryFile -Force -ErrorAction SilentlyContinue
-  }
-  if ($script:GraphSessionOwned) {
-    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
-    $script:GraphSessionOwned = $false
+  if ($workCreated -and [IO.Directory]::Exists($work)) {
+    try { [IO.Directory]::Delete($work, $true) }
+    catch { Write-Warning "Remove leftover release files from $work after this process finishes." }
   }
 }
+$result | ConvertTo-Json -Depth 12
+if ($result.Status -eq 'Failed') { exit 1 }
+if ($result.Status -eq 'NeedsConsent') { exit 2 }
