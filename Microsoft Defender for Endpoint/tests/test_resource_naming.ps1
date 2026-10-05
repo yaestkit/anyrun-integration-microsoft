@@ -39,7 +39,7 @@ function Invoke-NamingScenario {
   $SubscriptionId = '22222222-2222-2222-2222-222222222222'
   $ResourceGroup = $Group
   $Connector = $Kind; $InstanceName = $Instance; $instanceNameWasPassed = $InstancePassed
-  $deploySandbox = $Kind -in @('Sandbox','Both'); $deployFeeds = $Kind -in @('Feeds','Both')
+  $deploySandbox = $Kind -eq 'Sandbox'; $deployFeeds = $Kind -eq 'Feeds'
   $sandboxDisplayNameWasPassed = $false; $feedsDisplayNameWasPassed = $false
   $SandboxAppDisplayName = 'ANYRUN-Sandbox-MDE-Connector'; $FeedsAppDisplayName = 'ANYRUN-Feeds-MDE-Connector'
   $SandboxFunctionName=$null; $SandboxLogicAppName=$null; $SandboxStorageAccountName=$null
@@ -47,7 +47,7 @@ function Invoke-NamingScenario {
   foreach ($key in $Overrides.Keys) { Set-Variable -Name $key -Value $Overrides[$key] }
   $script:azureResources = $Existing
   $existingResourceGroup = if ($Existing.Count -gt 0) { [pscustomobject]@{Name=$Group} } else { $null }
-  function Read-Text { param($Prompt,$Default,$ValidationPattern,$ValidationMessage) $Default }
+  function Read-Text { param($Prompt,$Default,$ValidationPattern,$ValidationMessage,$HelpText) $Default }
   . $mainNaming
   $result=@{InstanceName=$InstanceName; Legacy=$useLegacyNames; SandboxAppDisplayName=$SandboxAppDisplayName; FeedsAppDisplayName=$FeedsAppDisplayName}
   foreach ($key in $resourceNameTypes.Keys) { $result[$key]=Get-Variable -Name $key -ValueOnly }
@@ -79,9 +79,8 @@ Assert-Equal $sandbox.SandboxLogicAppName 'ANYRUN-Sandbox-MDE-demo01-LA' 'Sandbo
 Assert-Equal $sandbox.SandboxFunctionName 'ANYRUN-Sandbox-MDE-demo01-abcdef-FA' 'Sandbox Function casing'
 Assert-Equal $sandbox.SandboxStorageAccountName 'anyrunsbabcdefdemo01' 'Sandbox storage'
 Assert-Equal $sandbox.LogAnalyticsWorkspaceName 'ANYRUN-Sandbox-MDE-demo01-LAW' 'Sandbox workspace'
-$both=Invoke-NamingScenario -Kind Both
-Assert-Equal $both.LogAnalyticsWorkspaceName 'ANYRUN-MDE-demo01-LAW' 'Both share one workspace'
-Assert-True ($both.SandboxFunctionName -ne $both.FeedsFunctionName) 'Connectors must have different names'
+Assert-Throws { Get-ConnectorDefaultNames -ConnectorType Both -InstanceName demo01 -NameHash abcdef } 'Combined installation is no longer supported'
+Assert-True ($sandbox.SandboxFunctionName -ne $feeds.FeedsFunctionName) 'Connectors must have different names'
 $repeat=Invoke-NamingScenario
 Assert-Equal $repeat.FeedsFunctionName $feeds.FeedsFunctionName 'Repeated instance keeps Function'
 $other=Invoke-NamingScenario -Instance demo02
@@ -92,10 +91,11 @@ $script:armHash='ghijkl'
 $otherScope=Invoke-NamingScenario -Group ANYRUN-MDE-Other-RG
 Assert-True ($otherScope.FeedsFunctionName -ne $feeds.FeedsFunctionName) 'Resource-group hash must reach the Function name'
 $script:armHash='abcdef'
-$max=Invoke-NamingScenario -Kind Both -Instance abcdefghijkl
+$max=Invoke-NamingScenario -Kind Feeds -Instance abcdefghijkl
 Assert-Equal $max.FeedsStorageAccountName.Length 24 'Feeds storage 24-character limit'
-Assert-Equal $max.SandboxStorageAccountName.Length 24 'Sandbox storage 24-character limit'
-foreach ($name in @($max.FeedsStorageAccountName,$max.SandboxStorageAccountName)) {
+$maxSandbox=Invoke-NamingScenario -Kind Sandbox -Instance abcdefghijkl
+Assert-Equal $maxSandbox.SandboxStorageAccountName.Length 24 'Sandbox storage 24-character limit'
+foreach ($name in @($max.FeedsStorageAccountName,$maxSandbox.SandboxStorageAccountName)) {
   Assert-True ($name -cmatch '^[a-z0-9]{3,24}$') 'Storage must contain only lowercase letters and digits'
 }
 $auto1=Invoke-NamingScenario -Instance '' -InstancePassed $false

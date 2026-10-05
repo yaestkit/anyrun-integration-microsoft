@@ -41,7 +41,7 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertEqual(self.text.count("["), self.text.count("]"))
 
     def test_modes_and_parameter_validation(self):
-        self.assertIn('[ValidateSet("Sandbox", "Feeds", "Both")]', self.text)
+        self.assertIn('[ValidateSet("Sandbox", "Feeds")]', self.text)
         self.assertIn('[ValidateSet("Audit", "Block")]', self.text)
         self.assertNotIn('[ValidateSet("Allowed",', self.text)
         self.assertIn('[ValidateRange(1, 100)]', self.text)
@@ -54,6 +54,22 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertNotIn('Sentinel', self.doc)
         self.assertIn('if (-not $FeedsApiKey) { $FeedsApiKey = Read-RequiredSecret', self.text)
         self.assertIn('anyrunApiKey                 = $FeedsApiKey', self.text)
+
+    def test_feeds_first_run_schedule_matches_azureapp(self):
+        standalone = json.loads(FEEDS_LOGIC.read_text(encoding="utf-8"))
+        marketplace = json.loads(
+            (ROOT.parent / "AzureApp" / "1.1.4" / "TI-Feeds" / "mainTemplate.json")
+            .read_text(encoding="utf-8")
+        )
+        def trigger(template):
+            workflow = next(
+                resource for resource in template["resources"]
+                if resource["type"] == "Microsoft.Logic/workflows"
+            )
+            self.assertEqual(workflow["properties"]["state"], "Enabled")
+            return workflow["properties"]["definition"]["triggers"]["Recurrence"]
+        self.assertEqual(trigger(standalone), trigger(marketplace))
+        self.assertNotIn("startTime", trigger(standalone)["recurrence"])
 
     def test_sandbox_indicator_action_is_wired_through_deployment(self):
         template = json.loads(SANDBOX_FUNCTION.read_text(encoding="utf-8"))
@@ -233,11 +249,12 @@ class DeploymentScriptTests(unittest.TestCase):
 
     def test_exact_least_privilege_roles(self):
         roles = {
-            "Alert.ReadWrite.All", "Machine.LiveResponse", "Machine.Read.All",
+            "Alert.ReadWrite.All", "Machine.LiveResponse",
             "Machine.ReadWrite.All", "Ti.ReadWrite", "Library.Manage",
         }
-        quoted = set(re.findall(r'^\s+"([A-Za-z.]+)",?$', self.text, re.MULTILINE))
-        self.assertTrue(roles.issubset(quoted))
+        sandbox = self.text.split("$sandboxRoles = @(", 1)[1].split(")", 1)[0]
+        quoted = set(re.findall(r'"([A-Za-z.]+)"', sandbox))
+        self.assertEqual(roles, quoted)
         configured = self.text.split("$sandboxRoles = @(", 1)[1].split("$encodedRoot", 1)[0]
         for role in ("Ti.ReadWrite.All", "Ti.Read.All", "Alert.Read.All"):
             self.assertNotIn(f'"{role}"', configured)

@@ -25,7 +25,15 @@ function Get-AzResourceGroup { [CmdletBinding()]param($Name) }
 function Ensure-ResourceProvider { param($ProviderNamespace) }
 function Assert-FlexConsumptionRegion { param($Location) }
 function Ensure-ResourceGroup { param($Name,$Location) [pscustomobject]@{Name=$Name;Location=$Location} }
-function Get-AzResource { [CmdletBinding()]param($ResourceGroupName,$ResourceType,$Name) }
+function Get-AzResource {
+  [CmdletBinding()]param($ResourceGroupName,$ResourceType,$Name,[switch]$ExpandProperties)
+  if ($ExpandProperties -and $ResourceType -eq 'Microsoft.Web/sites') {
+    return [pscustomobject]@{Properties=[pscustomobject]@{state='Running'}}
+  }
+  if (-not $ResourceType -and $global:AnyRunInstallerFlow.ContainsKey('SharedGroup')) {
+    return [pscustomobject]@{ResourceType='Microsoft.Logic/workflows';Name='ANYRUN-Sandbox-MDE-demo01-LA'}
+  }
+}
 function Test-EffectiveRoleAssignmentPermission { param($Scope) return $true }
 function Get-AzRoleAssignment {
   [CmdletBinding()]param($Scope)
@@ -43,14 +51,36 @@ function Ensure-StorageAccount {
 function Ensure-ConnectorIdentity {
   param($Label,$DisplayName,$ExistingAppId,$ExistingClientSecret,$RequiredRoleValues,$TrustedExistingFunctionBinding,[switch]$RotateSecret)
   $global:AnyRunInstallerFlow.Identities++
+  $deferred=$global:AnyRunInstallerFlow.ContainsKey('Deferred') -and $global:AnyRunInstallerFlow.Deferred -eq $Label
+  if ($deferred) {
+    $script:DeferredConsentUrls.Add('https://login.microsoftonline.com/fixture/adminconsent?client_id=fixture')
+    $script:DeferredConnectorLabels.Add($Label)
+  }
   [pscustomobject]@{DisplayName=$DisplayName;ClientId='33333333-3333-3333-3333-333333333333';
     ClientSecret=(ConvertTo-SecureString 'fixture-client-secret' -AsPlainText -Force);
-    ConsentDeferred=$false;NewCredentialKeyId=$null;ApplicationObjectId='fixture-object'}
+    ConsentDeferred=$deferred;NewCredentialKeyId=$null;ApplicationObjectId='fixture-object'}
 }
 function Remove-LegacyStorageRoleAssignment { param($StorageAccountName,$FunctionAppName,$ConnectorType) }
 function Remove-ConnectorDeploymentArtifacts { param($StorageAccountName,$AllowRoleCleanup) }
 function Wait-FunctionRegistration { param($FunctionAppName,$FunctionName,$Attempts) }
-function Get-ResourceProvisioningState { param($ResourceType,$Name) return 'Succeeded' }
+function Invoke-AzRestMethod {
+  [CmdletBinding()]param($Method,$Path)
+  if ($Method -ne 'GET' -or $Path -notmatch '/Microsoft.Logic/workflows/([^/?]+)\?api-version=2016-06-01$') {
+    throw "Unexpected verification request: $Method $Path"
+  }
+  $workflowName=$Matches[1]
+  $id=$Path.Split('?')[0]
+  if ($global:AnyRunInstallerFlow.ContainsKey('MissingWorkflow')) {
+    return [pscustomobject]@{StatusCode=404;Content='{}'}
+  }
+  if ($global:AnyRunInstallerFlow.ContainsKey('WrongWorkflow')) {
+    $id=$id.Replace($workflowName,'ANYRUN-Sandbox-MDE-demo01-LA')
+    $workflowName='ANYRUN-Sandbox-MDE-demo01-LA'
+  }
+  $state=if ($global:AnyRunInstallerFlow.ContainsKey('DisabledWorkflow')) {'Disabled'} else {'Enabled'}
+  $payload=@{id=$id;name=$workflowName;type='Microsoft.Logic/workflows';properties=@{provisioningState='Succeeded';state=$state}}
+  [pscustomobject]@{StatusCode=200;Content=($payload|ConvertTo-Json -Depth 10 -Compress)}
+}
 function Get-ApiConnectionStatus { param($Name) return 'Connected' }
 function Invoke-WebRequest {
   [CmdletBinding()]param([string]$Uri,[string]$OutFile)
@@ -115,7 +145,7 @@ $instrumented=$source.Replace($marker,$fixture+"`n"+$marker)
 [IO.File]::WriteAllText($temporary,$instrumented)
 $passed=0
 try {
-  foreach ($kind in @('Sandbox','Feeds','Both')) {
+  foreach ($kind in @('Sandbox','Feeds')) {
     $global:AnyRunInstallerFlow=@{RepoRoot=$repoRoot;Missing='';Corrupt=''}
     $p=@{Connector=$kind;TenantId='11111111-1111-1111-1111-111111111111';
       SubscriptionId='22222222-2222-2222-2222-222222222222';ResourceGroup='ANYRUN-MDE-RG';
@@ -123,7 +153,7 @@ try {
       SandboxApiKey=(ConvertTo-SecureString 'fixture-api-key' -AsPlainText -Force);
       FeedsApiKey=(ConvertTo-SecureString 'fixture-api-key' -AsPlainText -Force)}
     $output=@(& $temporary @p 6>&1)
-    $count=if ($kind -eq 'Both') {2} else {1}
+    $count=1
     if ($global:AnyRunInstallerFlow.Identities -ne $count) {throw "Wrong identity count for $kind"}
     if ($global:AnyRunInstallerFlow.Validations.Count -ne 2*$count) {throw "Incomplete ARM validation for $kind"}
     if ($global:AnyRunInstallerFlow.Deployments.Count -ne 2*$count) {throw "Incomplete deployment for $kind"}
@@ -150,6 +180,37 @@ try {
     }
     $passed++
     Write-Host "PASS: $fault fails before identity/deployment writes."
+  }
+  foreach ($scenario in @('SharedGroup','SkipLogicApp','DeferredFeeds','DeferredSandbox','MissingWorkflow','WrongWorkflow','DisabledWorkflow')) {
+    $global:AnyRunInstallerFlow=@{RepoRoot=$repoRoot;Missing='';Corrupt=''}
+    $p.Connector='Feeds';$p.Remove('SkipLogicApp')
+    if ($scenario -eq 'SharedGroup') {$global:AnyRunInstallerFlow.SharedGroup=$true}
+    if ($scenario -eq 'SkipLogicApp') {$p.SkipLogicApp=$true}
+    if ($scenario -eq 'DeferredFeeds') {$global:AnyRunInstallerFlow.Deferred='TI Feeds'}
+    if ($scenario -eq 'DeferredSandbox') {$p.Connector='Sandbox';$global:AnyRunInstallerFlow.Deferred='Sandbox'}
+    if ($scenario -in @('MissingWorkflow','WrongWorkflow','DisabledWorkflow')) {$global:AnyRunInstallerFlow[$scenario]=$true}
+    $errorMessage='';$output=@()
+    try {$output=@(& $temporary @p 6>&1)} catch {$errorMessage=$_.Exception.Message}
+    $log=$output|Out-String
+    if ($scenario -in @('MissingWorkflow','WrongWorkflow','DisabledWorkflow')) {
+      $expected=switch($scenario) {'MissingWorkflow' {'verification failures'} 'WrongWorkflow' {'unexpected resource'} 'DisabledWorkflow' {'expected Enabled'}}
+      if (-not $errorMessage.Contains($expected)) {throw "Unexpected $scenario result: $errorMessage"}
+      if ($log.Contains('Deployment finished.')) {throw "$scenario reported deployment success"}
+    } elseif ($scenario -in @('SkipLogicApp','DeferredFeeds','DeferredSandbox')) {
+      if ($errorMessage) {throw $errorMessage}
+      if ($log.Contains('Deployment finished.') -or -not $log.Contains('PARTIAL DEPLOYMENT')) {throw "$scenario did not report incomplete activation"}
+      $expected=if ($scenario -eq 'SkipLogicApp') {'SKIPPED (-SkipLogicApp)'} else {'NOT DEPLOYED (Defender admin consent pending)'}
+      if (-not $log.Contains($expected)) {throw "$scenario hid the skipped Logic App"}
+      $count=1
+      if ($global:AnyRunInstallerFlow.Deployments.Count -ne $count) {throw "$scenario deployed unexpected resources"}
+    } else {
+      if ($errorMessage) {throw $errorMessage}
+      if (-not $log.Contains('Deployment finished.') -or -not $log.Contains('ANYRUN-Feeds-MDE-demo01-LA [Succeeded]')) {throw 'Shared group Feeds deployment was not verified'}
+      if ($global:AnyRunInstallerFlow.Deployments.Count -ne 2) {throw 'Shared group Feeds deployment changed the Sandbox resource set'}
+      if (-not $log.Contains('Confirmed Logic App ID')) {throw 'Workflow resource ID was not verified'}
+    }
+    $passed++
+    Write-Host "PASS: $scenario validates actual workflow identity/state and deployment completion."
   }
   Write-Host "PASS: $passed installer-flow scenarios, no network or live Azure calls."
 } finally {

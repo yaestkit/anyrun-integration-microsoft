@@ -71,25 +71,17 @@
                         }
                     },
                     "triggers": {
-        "Recurrence": {
+                        "Recurrence": {
                             "recurrence": {
-                                "interval": "[parameters('intervalRecurrence')]",
                                 "frequency": "Hour",
-                                "timeZone": "Eastern Standard Time",
-                                "startTime": "2025-12-08T16:30:00Z"
+                                "interval": "[parameters('intervalRecurrence')]"
                             },
-                            "evaluatedRecurrence": {
-                                "interval": "[parameters('intervalRecurrence')]",
-                                "frequency": "Hour",
-                                "timeZone": "Eastern Standard Time",
-                                "startTime": "2025-12-08T16:30:00Z"
-                            },
-          "type": "Recurrence",
-          "runtimeConfiguration": {
-            "concurrency": {
-              "runs": 1
-            }
-          }
+                            "type": "Recurrence",
+                            "runtimeConfiguration": {
+                                "concurrency": {
+                                    "runs": 1
+                                }
+                            }
                         }
                     },
                     "actions": {
@@ -123,12 +115,12 @@
                                     "feed_fetch_depth": "@variables('feed_fetch_depth')",
                                     "minimum_confidence_threshold": "@variables('minimum_confidence_threshold')"
                                 },
-            "function": {
-              "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Feeds-MDE-FA')]"
-            },
-            "retryPolicy": {
-              "type": "none"
-            }
+                                "function": {
+                                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', variables('connectFunctionAppName'), '/functions/ANYRUN-Feeds-MDE-FA')]"
+                                },
+                                "retryPolicy": {
+                                    "type": "none"
+                                }
                             }
                         }
                     },

@@ -1,7 +1,7 @@
 # Automated deployment of ANY.RUN connectors for Microsoft Defender for Endpoint
 
 `Scripts/Deploy-ANYRUNMDEConnector.ps1` deploys the Sandbox connector, the TI
-Feeds connector, or both from Azure Cloud Shell (PowerShell).
+Feeds connector, one at a time, from Azure Cloud Shell (PowerShell).
 
 The Feeds standalone deployment files are included at:
 
@@ -54,7 +54,6 @@ The Sandbox registration receives:
 
 - `Alert.ReadWrite.All`
 - `Machine.LiveResponse`
-- `Machine.Read.All`
 - `Machine.ReadWrite.All`
 - `Ti.ReadWrite`
 - `Library.Manage`
@@ -164,11 +163,33 @@ PowerShell shell, then run one connector at a time:
 ./Deploy-ANYRUNMDEConnector.ps1 -Connector Feeds
 ```
 
-To deploy both with separate identities:
+To choose interactively, run without `-Connector`:
 
 ```powershell
-./Deploy-ANYRUNMDEConnector.ps1 -Connector Both
+./Deploy-ANYRUNMDEConnector.ps1
 ```
+
+The menu offers `Sandbox` (Defender alert analysis) and `Feeds`
+(scheduled TI indicator import). Type `1` / `Sandbox` or `2` / `Feeds`.
+There is no default: empty or invalid input asks again.
+`Both` is no longer supported. To install both connectors, run twice and reuse
+the same resource group and instance name. In `-NonInteractive` mode an explicit
+`-Connector Sandbox` or `-Connector Feeds` is required.
+
+Each input prompt explains the expected value. Subscription selection uses a
+list number with no default. Resource-group names and new-group region codes
+include examples; an existing group automatically uses its region. Instance
+names allow 1–12 lowercase letters or digits and must be kept for updates.
+Text defaults appear in brackets and Enter accepts them. Confirmation prompts
+explain Y/N and Enter; Defender permission consent uses `[Y/n]`.
+API keys use masked input and distinguish Sandbox from TI Feeds. Existing Entra
+credentials require the client secret **value**, not the secret ID or app ID.
+App reuse and deferred-consent choices explain their deployment consequences.
+
+Resource naming evaluates the same ARM expression as Azure App. Its empty
+incremental deployment retries up to three times on timeout or an active previous
+request, with a 10-second delay. Other errors stop immediately; after exhausted
+retries, rerun with the same group and instance.
 
 For East US, use `-Region 'eastus'`. The region is used only when the resource
 group is created; an existing resource group's location wins.
@@ -395,9 +416,40 @@ Run the installer orchestration checks in PowerShell 7:
 ./tests/test_resource_naming.ps1
 ```
 
-The first test runs the actual installer for Sandbox, Feeds and Both with local
+The first test runs the actual installer separately for Sandbox and Feeds with local
 artifact downloads and stubbed Azure/Graph calls. It retains real SHA-256, ZIP
 checks, ARM parameter binding and template preparation, and verifies failure
 before identity writes if a file is missing or a package hash differs. These
 checks do not establish live Azure Policy, tenant permissions or runtime
 connectivity.
+
+## Verification and partial installation
+
+The installer verifies each Logic App by its full resource ID through the
+Microsoft.Logic workflow API in the selected subscription. A successful
+deployment must return the expected ID, name and type, `Succeeded` provisioning
+and `Enabled` workflow state. The verification log includes a direct portal link.
+Sandbox and Feeds may share the same resource group; their workflow names differ.
+
+With `-SkipLogicApp` or deferred Defender admin consent, the summary marks the
+Logic App as skipped or not deployed and reports `PARTIAL DEPLOYMENT`. Continue
+using the same resource group and instance name after consent, without
+`-SkipLogicApp`; use `-SkipFunctionApp` to reuse the verified Function App.
+
+## TI Feeds first run
+
+The Feeds Logic App uses the same Recurrence schedule as AzureApp: no fixed
+`startTime`, and an hourly interval configured by `-FeedsIntervalHours` (default
+2). Azure schedules the first run after workflow deployment; subsequent runs
+repeat at the configured interval. Deployment success does not confirm that
+the import run has completed. Check the Logic App run history or explicitly
+use `-TestFeedsInvocation` to request and wait for a test import.
+
+Validate interactive prompts and resource-name timeout handling offline:
+
+```powershell
+pwsh -NoProfile -File 'tests/test_installer_prompts.ps1'
+```
+
+These checks execute the real input helpers and naming retry logic with mocked
+console/Azure IO; they do not deploy to Azure.

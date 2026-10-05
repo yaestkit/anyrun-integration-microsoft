@@ -2,7 +2,7 @@
 
 <#
 .SYNOPSIS
-  Deploys the ANY.RUN Sandbox and/or TI Feeds connectors for Microsoft Defender
+  Deploys an ANY.RUN Sandbox or TI Feeds connector for Microsoft Defender
   for Endpoint.
 
 .DESCRIPTION
@@ -15,14 +15,19 @@
   app registrations, workspaces, and storage accounts are reused. An App
   Registration with permissions for another API is rejected as shared.
 
+.PARAMETER Connector
+  Sandbox analyzes Defender alerts with ANY.RUN Sandbox. Feeds imports TI
+  indicators into Defender on a schedule.
+  There is no default; omitting this parameter opens an interactive menu. Required in -NonInteractive mode.
+
+.EXAMPLE
+  ./Deploy-ANYRUNMDEConnector.ps1
+
 .EXAMPLE
   ./Deploy-ANYRUNMDEConnector.ps1 -Connector Sandbox
 
 .EXAMPLE
   ./Deploy-ANYRUNMDEConnector.ps1 -Connector Feeds
-
-.EXAMPLE
-  ./Deploy-ANYRUNMDEConnector.ps1 -Connector Both
 
 .NOTES
   The Sandbox connector still requires the operator to enable Defender Live
@@ -31,8 +36,8 @@
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)]
-  [ValidateSet("Sandbox", "Feeds", "Both")]
+  [Parameter(HelpMessage = "Choose Sandbox or Feeds. Omit this parameter for the interactive menu.")]
+  [ValidateSet("Sandbox", "Feeds")]
   [string]$Connector,
 
   [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
@@ -111,7 +116,7 @@ param(
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsFunctionTemplateSha256 = "e93cd0a4c97bd66481919af35b9fbc6f15859a300c2d743cd36a03bf812c53f4",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsLogicTemplateSha256 = "ddf86fc10ff613dc5df83e4d3dffc2d416fb3c78ae12c2ba18d337ea538a7d69",
+  [string]$FeedsLogicTemplateSha256 = "e219f7f13a09646b940fefb659cedf5cb35cd196ede67d6aa48c88f6b1f397ec",
   [string]$SandboxFunctionTemplateFile,
   [string]$SandboxLogicTemplateFile,
   [string]$FeedsFunctionTemplateFile,
@@ -141,7 +146,6 @@ $feedsAppIdWasPassed = $PSBoundParameters.ContainsKey("FeedsAppId")
 $sandboxRoles = @(
   "Alert.ReadWrite.All",
   "Machine.LiveResponse",
-  "Machine.Read.All",
   "Machine.ReadWrite.All",
   "Ti.ReadWrite",
   "Library.Manage"
@@ -176,9 +180,15 @@ function Read-Text {
     [Parameter(Mandatory = $true)][string]$Prompt,
     [string]$Default,
     [string]$ValidationPattern,
-    [string]$ValidationMessage = "Invalid value."
+    [string]$ValidationMessage = "Invalid value.",
+    [string]$HelpText
   )
 
+  if (-not $NonInteractive) {
+    if ($HelpText) { Write-Host "  $HelpText" -ForegroundColor Gray }
+    $inputHint = if ([string]::IsNullOrWhiteSpace($Default)) { "A value is required; there is no default." } else { "Press Enter to use the value in brackets." }
+    Write-Host "  $inputHint" -ForegroundColor DarkGray
+  }
   while ($true) {
     $suffix = if ([string]::IsNullOrWhiteSpace($Default)) { "" } else { " [$Default]" }
     if ($NonInteractive) {
@@ -191,6 +201,7 @@ function Read-Text {
       Write-Host "    A value is required." -ForegroundColor Red
       continue
     }
+    $value = $value.Trim()
     if ($ValidationPattern -and $value -notmatch $ValidationPattern) {
       Write-Host "    $ValidationMessage" -ForegroundColor Red
       continue
@@ -203,37 +214,67 @@ function Read-Choice {
   param(
     [Parameter(Mandatory = $true)][string]$Prompt,
     [Parameter(Mandatory = $true)][string[]]$Options,
-    [int]$Default = 1
+    [int]$Default = 1,
+    [string[]]$Values,
+    [string]$HelpText
   )
 
+  if ($Default -lt 0 -or $Default -gt $Options.Count) { throw "Choice default is outside the options list." }
+  if ($Values -and $Values.Count -ne $Options.Count) { throw "Choice values must match the options list." }
   if ($NonInteractive) { throw "Non-interactive deployment cannot answer prompt: $Prompt" }
   Write-Host ""
   Write-Host "  $Prompt" -ForegroundColor White
+  if ($HelpText) { Write-Host "  $HelpText" -ForegroundColor Gray }
   for ($i = 0; $i -lt $Options.Count; $i++) {
     $marker = if (($i + 1) -eq $Default) { " (default)" } else { "" }
     Write-Host "    [$($i + 1)] $($Options[$i])$marker"
   }
 
+  $choiceHint = "Enter a number from 1 to $($Options.Count)"
+  if ($Values) { $choiceHint += " or a name ($($Values -join ", "))" }
+  $choiceHint += if ($Default -gt 0) { "; Enter selects $Default." } else { "; no default. Empty input will ask again." }
+  Write-Host "  $choiceHint" -ForegroundColor DarkGray
   while ($true) {
-    $raw = Read-Host "  Choice"
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $Default }
+    $raw = (Read-Host "  Choice").Trim()
+    if ([string]::IsNullOrWhiteSpace($raw) -and $Default -gt 0) { return $Default }
+    if ($Values) {
+      for ($i = 0; $i -lt $Values.Count; $i++) {
+        if ($raw -eq $Values[$i]) { return ($i + 1) }
+      }
+    }
     $selected = 0
     if ([int]::TryParse($raw, [ref]$selected) -and $selected -ge 1 -and $selected -le $Options.Count) {
       return $selected
     }
-    Write-Host "    Enter a number from 1 to $($Options.Count)." -ForegroundColor Red
+    Write-Host "    $choiceHint" -ForegroundColor Red
   }
+}
+
+function Select-Connector {
+  param([string]$RequestedConnector)
+  if ($RequestedConnector) { return $RequestedConnector }
+  if ($NonInteractive) { throw "Supply -Connector Sandbox or Feeds when using -NonInteractive." }
+  $values = @("Sandbox", "Feeds")
+  $selected = Read-Choice -Prompt "Choose the connector to install" -Default 0 -Values $values -Options @(
+    "Sandbox - analyze Defender alerts with ANY.RUN Sandbox",
+    "Feeds - import ANY.RUN TI indicators into Defender on a schedule"
+  )
+  if ($selected -eq 2) { return "Feeds" }
+  return "Sandbox"
 }
 
 function Confirm-Action {
   param([Parameter(Mandatory = $true)][string]$Prompt, [bool]$Default = $true)
   if ($NonInteractive) { return $Default }
   $hint = if ($Default) { "Y/n" } else { "y/N" }
+  $defaultAnswer = if ($Default) { "Yes" } else { "No" }
+  Write-Host "  Enter Y (yes) or N (no); Enter selects $defaultAnswer." -ForegroundColor DarkGray
   while ($true) {
     $answer = (Read-Host "$Prompt [$hint]").Trim().ToLowerInvariant()
     if (-not $answer) { return $Default }
     if ($answer -in @("y", "yes")) { return $true }
     if ($answer -in @("n", "no")) { return $false }
+    Write-Host "    Enter Y (yes) or N (no)." -ForegroundColor Red
   }
 }
 
@@ -319,8 +360,10 @@ function Show-ResourceGroupWriteAccess {
 }
 
 function Read-RequiredSecret {
-  param([Parameter(Mandatory = $true)][string]$Prompt)
+  param([Parameter(Mandatory = $true)][string]$Prompt, [string]$HelpText)
   if ($NonInteractive) { throw "Non-interactive deployment requires the secret parameter for: $Prompt" }
+  if ($HelpText) { Write-Host "  $HelpText" -ForegroundColor Gray }
+  Write-Host "  Paste the value only. Input is masked; a non-empty value is required." -ForegroundColor DarkGray
   while ($true) {
     $secret = Read-Host $Prompt -AsSecureString
     if ($secret -and $secret.Length -gt 0) { return $secret }
@@ -560,6 +603,7 @@ function Connect-AzureSmart {
 
   if ($needsLogin) {
     Write-Step "Signing in to Azure..."
+    Write-Host "  Follow the Azure sign-in instructions with the account and directory for this deployment." -ForegroundColor Gray
     if ($RequestedTenantId) { Connect-AzAccount -Tenant $RequestedTenantId | Out-Null }
     else                    { Connect-AzAccount | Out-Null }
   }
@@ -587,6 +631,7 @@ function Connect-AzureSmart {
   }
   Write-Host ""
   Write-Host "  Available subscriptions:" -ForegroundColor White
+  Write-Host "  Choose where to deploy the Azure resources. Enter a list number; there is no default." -ForegroundColor Gray
   for ($i = 0; $i -lt $subscriptions.Count; $i++) {
     $currentMarker = if ($currentSubscriptionId -and $subscriptions[$i].Id -eq $currentSubscriptionId) { " (current)" } else { "" }
     Write-Host "    [$($i + 1)] $($subscriptions[$i].Name) ($($subscriptions[$i].Id))$currentMarker"
@@ -688,9 +733,26 @@ function Get-AzureAppNameHash {
     resources = @()
     outputs = @{ nameHash = @{ type = 'string'; value = "[take(uniqueString(resourceGroup().id, parameters('instanceName')), 6)]" } }
   }
-  $deployment = New-AzResourceGroupDeployment -Name "ANYRUN-MDE-Names-$InstanceName" `
-    -ResourceGroupName $ResourceGroupName -Mode Incremental -TemplateObject $template `
-    -TemplateParameterObject @{ instanceName = $InstanceName } -ErrorAction Stop
+  $maxAttempts = 3
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    try {
+      Write-Step "Evaluating Azure resource names (attempt $attempt/$maxAttempts)..."
+      $deployment = New-AzResourceGroupDeployment -Name "ANYRUN-MDE-Names-$InstanceName" `
+        -ResourceGroupName $ResourceGroupName -Mode Incremental -TemplateObject $template `
+        -TemplateParameterObject @{ instanceName = $InstanceName } -ErrorAction Stop
+      break
+    } catch {
+      $details = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { "" }
+      $message = "$($_.Exception.Message) $details"
+      $retryable = $message -match '(?i)HttpClient\.Timeout|timed out|timeout|DeploymentActive'
+      if (-not $retryable) { throw }
+      if ($attempt -eq $maxAttempts) {
+        throw "Azure resource-name evaluation did not complete after $maxAttempts attempts. Re-run with the same resource group and instance name. No connector identity or Function/Logic App has been created by this step. Azure error: $message"
+      }
+      Write-Host "  Azure resource-name evaluation timed out or is still active; retrying the same empty deployment in 10 seconds. Resource names stay unchanged." -ForegroundColor Yellow
+      Start-Sleep -Seconds 10
+    }
+  }
   if ($deployment.ProvisioningState -ne 'Succeeded') {
     throw "Resource naming evaluation failed: $($deployment.ProvisioningState)."
   }
@@ -701,7 +763,7 @@ function Get-AzureAppNameHash {
 
 function Get-ConnectorDefaultNames {
   param(
-    [Parameter(Mandatory = $true)][ValidateSet('Sandbox', 'Feeds', 'Both')][string]$ConnectorType,
+    [Parameter(Mandatory = $true)][ValidateSet('Sandbox', 'Feeds')][string]$ConnectorType,
     [AllowEmptyString()][ValidatePattern('^[a-z0-9]{0,12}$', Options = 'None')][string]$InstanceName,
     [string]$NameHash,
     [string]$LegacySuffix
@@ -725,7 +787,6 @@ function Get-ConnectorDefaultNames {
   $workspaceBase = switch ($ConnectorType) {
     Sandbox { $sandboxBase }
     Feeds { $feedsBase }
-    Both { "ANYRUN-MDE-$InstanceName" }
   }
   $sandboxStorage = "anyrunsb$NameHash$InstanceName"
   $feedsStorage = "anyrunfeeds$NameHash$InstanceName"
@@ -1063,7 +1124,7 @@ function Confirm-DefenderPermissionGrant {
   if ($NonInteractive) {
     throw "Non-interactive consent requires -ApproveDefenderPermissions after reviewing the requested roles."
   }
-  if (-not (Confirm-Action "  Grant these Defender application permissions?" $false)) {
+  if (-not (Confirm-Action "  Grant these Defender application permissions?" $true)) {
     throw "Defender application-permission grant was not approved."
   }
 }
@@ -1117,15 +1178,16 @@ function Ensure-ConnectorIdentity {
       if ($NonInteractive -and -not $ConfirmDedicatedAppRegistration) {
         throw "Non-interactive reuse of an App Registration found by display name requires -ConfirmDedicatedAppRegistration or an explicit connector AppId."
       }
-      if (Confirm-Action "  Reuse it?" $true) {
+      if (Confirm-Action "  Reuse this App Registration for this connector?" $true) {
         $application = $appMatches[0]
         Write-Host "  Reuse is safe only when this App Registration is dedicated to the $Label connector." -ForegroundColor Yellow
-        $dedicatedConfirmed = $ConfirmDedicatedAppRegistration -or (Confirm-Action "  Confirm dedicated use" $false)
+        $dedicatedConfirmed = $ConfirmDedicatedAppRegistration -or (Confirm-Action "  Confirm this App Registration is used only by this connector" $false)
         if (-not $dedicatedConfirmed) {
           throw "A dedicated App Registration is required."
         }
       } else {
-        $DisplayName = Read-Text -Prompt "New App Registration display name" -Default "$DisplayName-$(Get-Date -Format 'yyyyMMdd')"
+        $DisplayName = Read-Text -Prompt "New App Registration display name" -Default "$DisplayName-$(Get-Date -Format 'yyyyMMdd')" `
+          -HelpText "Enter a new Entra App Registration display name, for example ANYRUN-Feeds-MDE-test-Connector."
       }
     }
   }
@@ -1177,7 +1239,8 @@ function Ensure-ConnectorIdentity {
       } elseif ($NonInteractive) {
         throw "Admin consent is not visible yet. Grant consent and re-run, or add -DeferConsent to deploy only the Function App now."
       } else {
-        $choice = Read-Choice -Prompt "Admin consent" -Options @(
+        $choice = Read-Choice -Prompt "Admin consent" `
+          -HelpText "Open the URL above and have an administrator grant consent before choosing 1. Option 2 leaves the connector incomplete: the Logic App will not be deployed." -Options @(
           "Consent was granted; verify now",
           "Continue with Function App only and grant consent later"
         ) -Default 1
@@ -1213,12 +1276,14 @@ function Ensure-ConnectorIdentity {
       $clientSecret = $newCredential.Secret
       $newCredentialKeyId = $newCredential.KeyId
     } else {
-      $secretChoice = Read-Choice -Prompt "Client secret for '$($application.DisplayName)'" -Options @(
+      $secretChoice = Read-Choice -Prompt "Client secret for '$($application.DisplayName)'" `
+        -HelpText "Choose 1 if you have a valid secret value for this registration. Choose 2 to create a new secret and configure the Function App with it." -Options @(
         "Paste an existing secret",
         "Generate a new secret"
       ) -Default 1
       if ($secretChoice -eq 1) {
-        $clientSecret = Read-RequiredSecret "  Client secret"
+        $clientSecret = Read-RequiredSecret "  Client secret" `
+          -HelpText "Use the client secret VALUE saved when it was created in Entra ID > App registrations > this app > Certificates & secrets. Do not enter its secret ID, app ID or the ANY.RUN API key."
       } else {
         $newCredential = New-ConnectorSecret -Application $application -Label $Label
         $clientSecret = $newCredential.Secret
@@ -1569,17 +1634,27 @@ function Test-ArmDeployment {
     ResourceGroupName       = $ResourceGroup
     TemplateParameterObject = $TemplateParameters
     ErrorAction             = "Stop"
+    WarningVariable         = "armValidationWarnings"
   }
   if ($TemplateFile) { $splat.TemplateFile = $TemplateFile }
   else               { $splat.TemplateUri = $TemplateUri }
 
   Write-Step "Validating $Label against Azure Policy and ARM..."
+  $armValidationWarnings = @()
   $validationErrors = @(Test-AzResourceGroupDeployment @splat)
   if ($validationErrors.Count -gt 0) {
     $messages = @($validationErrors | ForEach-Object { $_.Message }) -join "`n"
     throw "$Label pre-flight validation failed:`n$messages"
   }
-  Write-Host "  $Label ARM validation succeeded." -ForegroundColor Green
+  if (@($armValidationWarnings).Count -gt 0) {
+    $diagnostics = ($armValidationWarnings | ForEach-Object { $_.ToString() }) -join "`n"
+    if ($diagnostics -match 'NestedDeploymentShortCircuited' -and $diagnostics -match 'AssignFunctionStorageRole') {
+      Write-Host "  Azure could not prevalidate the storage role assignment because the Function App identity is resolved during deployment. Azure will evaluate this part when deploying; this warning alone does not mean deployment failed." -ForegroundColor Yellow
+    }
+    Write-Host "  $Label ARM validation completed with diagnostics; some checks may be deferred until deployment." -ForegroundColor Yellow
+  } else {
+    Write-Host "  $Label ARM validation succeeded." -ForegroundColor Green
+  }
 }
 
 function Get-DeploymentOperationDiagnostic {
@@ -1739,6 +1814,31 @@ function Wait-FunctionRegistration {
 
 function Get-ResourceProvisioningState {
   param([string]$ResourceType, [string]$Name)
+  if ($ResourceType -eq 'Microsoft.Logic/workflows') {
+    # Query the workflow provider in the selected subscription directly rather
+    # than inferring success from deployment status or the current Az context.
+    $expectedId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Logic/workflows/$Name"
+    $response = Invoke-AzRestMethod -Method GET -Path "${expectedId}?api-version=2016-06-01" -ErrorAction Stop
+    if ($response.StatusCode -eq 404) { return 'NOT FOUND' }
+    if ($response.StatusCode -ne 200) { throw "Logic App verification for '$expectedId' returned HTTP $($response.StatusCode)." }
+    $workflow = ConvertFrom-AzRestContent -Response $response
+    if (-not $workflow -or
+        (Get-ObjectPropertyValue -InputObject $workflow -Name 'id') -ne $expectedId -or
+        (Get-ObjectPropertyValue -InputObject $workflow -Name 'type') -ne 'Microsoft.Logic/workflows' -or
+        (Get-ObjectPropertyValue -InputObject $workflow -Name 'name') -ne $Name) {
+      throw "Azure returned an unexpected resource while verifying Logic App '$expectedId'."
+    }
+    $properties = Get-ObjectPropertyValue -InputObject $workflow -Name 'properties'
+    if (-not $properties) { throw "Logic App '$expectedId' has no readable properties." }
+    $state = Get-ObjectPropertyValue -InputObject $properties -Name 'state'
+    $provisioningState = Get-ObjectPropertyValue -InputObject $properties -Name 'provisioningState'
+    Write-Host "  Confirmed Logic App ID : $expectedId" -ForegroundColor White
+    Write-Host "  Logic App state        : $state" -ForegroundColor White
+    Write-Host "  Open Logic App         : https://portal.azure.com/#resource$expectedId/overview" -ForegroundColor Cyan
+    if ($state -ne 'Enabled') { throw "Logic App '$Name' is '$state'; expected Enabled." }
+    if (-not $provisioningState) { return 'UNKNOWN' }
+    return $provisioningState
+  }
   $resource = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType $ResourceType -Name $Name -ExpandProperties -ErrorAction SilentlyContinue
   if (-not $resource) { return "NOT FOUND" }
   $propertyNames = @($resource.Properties.PSObject.Properties.Name)
@@ -1798,8 +1898,14 @@ function Invoke-FeedsSmokeTest {
 try {
 Write-Banner "ANY.RUN Microsoft Defender for Endpoint connector deployment"
 
-$deploySandbox = $Connector -in @("Sandbox", "Both")
-$deployFeeds = $Connector -in @("Feeds", "Both")
+$Connector = Select-Connector -RequestedConnector $Connector
+if (-not $NonInteractive) {
+  Write-Host "  Prompts explain the expected input; brackets show defaults. API keys and client secrets use masked input." -ForegroundColor Gray
+  Write-Host "  Azure uses your signed-in directory. To select another directory/subscription, rerun with -TenantId / -SubscriptionId (GUIDs from Azure portal)." -ForegroundColor Gray
+}
+
+$deploySandbox = $Connector -eq "Sandbox"
+$deployFeeds = $Connector -eq "Feeds"
 if ($RotateClientSecret -and $SkipFunctionApp) {
   throw "-RotateClientSecret cannot be combined with -SkipFunctionApp because the Function App must receive the new secret."
 }
@@ -1862,7 +1968,9 @@ if (-not $ResourceGroup) {
   if (Get-AzResourceGroup -Name "rg-anyrun-mde" -ErrorAction SilentlyContinue) {
     $defaultResourceGroup = "rg-anyrun-mde"
   }
-  $ResourceGroup = Read-Text -Prompt "Resource group name" -Default $defaultResourceGroup
+  $ResourceGroup = Read-Text -Prompt "Resource group name" -Default $defaultResourceGroup `
+    -HelpText "Enter an existing group name to reuse it (Sandbox and Feeds may share a group), or a new name to create it. Example: ANYRUN-MDE-RG. Existing groups keep their region." `
+    -ValidationPattern '^[^<>%&:\\?/#]{1,90}(?<!\.)$' -ValidationMessage "Use 1 to 90 characters, no < > % & : backslash ? / #, and no trailing period."
 }
 if ($ResourceGroup -notmatch '^[^<>%&:\\?/#]{1,90}(?<!\.)$') {
   throw "Resource group name '$ResourceGroup' contains invalid characters or ends with a period."
@@ -1870,11 +1978,13 @@ if ($ResourceGroup -notmatch '^[^<>%&:\\?/#]{1,90}(?<!\.)$') {
 $existingResourceGroup = Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue
 if ($existingResourceGroup) {
   $Region = $existingResourceGroup.Location
+  Write-Host "  Using existing resource group '$ResourceGroup' in '$Region'." -ForegroundColor Green
 } elseif (-not $regionWasPassed) {
   if ($NonInteractive) {
     throw "A new resource group requires an explicit -Region in non-interactive mode."
   }
-  $Region = Read-Text -Prompt "Azure region" -Default $Region
+  $Region = Read-Text -Prompt "Azure region" -Default $Region `
+    -HelpText "Enter an Azure region code for the new group, for example eastus or westeurope. Flex Consumption support will be checked before deployment."
 }
 Write-Step "Checking Azure providers and Flex Consumption support before creating the resource group..."
 foreach ($providerNamespace in @("Microsoft.Web", "Microsoft.Storage", "Microsoft.Insights", "Microsoft.OperationalInsights", "Microsoft.Logic")) {
@@ -1913,7 +2023,8 @@ if ($useLegacyNames) {
     $defaultInstance = Get-StableSuffix -InputText ("$TenantId|$SubscriptionId|$ResourceGroup".ToLowerInvariant()) -Length 6
     $InstanceName = Read-Text -Prompt "Instance name (reuse the same value for updates)" `
       -Default $defaultInstance -ValidationPattern '^[a-z0-9]{1,12}$' `
-      -ValidationMessage 'Use 1 to 12 lowercase letters or digits.'
+      -ValidationMessage 'Use 1 to 12 lowercase letters or digits.' `
+      -HelpText 'Use 1 to 12 lowercase letters or digits, for example prod01. Keep the same value to update an installation; a different value creates a separate instance.'
     $InstanceName = $InstanceName.ToLowerInvariant()
   }
   Write-Step "Resolving Azure App resource names for instance '$InstanceName'..."
@@ -2093,11 +2204,11 @@ $sandboxStorage = $null
 $feedsStorage = $null
 if ($deploySandbox) {
   $sandboxStorage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $SandboxStorageAccountName.ToLowerInvariant() -Location $Region
-  if (-not $SandboxApiKey) { $SandboxApiKey = Read-RequiredSecret "  ANY.RUN Sandbox API key (without the 'API-KEY ' prefix)" }
+  if (-not $SandboxApiKey) { $SandboxApiKey = Read-RequiredSecret "  ANY.RUN Sandbox API key (without the 'API-KEY ' prefix)" -HelpText "Use the Sandbox API key from your ANY.RUN account API settings. It is separate from the TI Feeds key; omit the API-KEY prefix." }
 }
 if ($deployFeeds) {
   $feedsStorage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $FeedsStorageAccountName.ToLowerInvariant() -Location $Region
-  if (-not $FeedsApiKey) { $FeedsApiKey = Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)" }
+  if (-not $FeedsApiKey) { $FeedsApiKey = Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)" -HelpText "Use the TI Feeds API key issued for your ANY.RUN Threat Intelligence subscription. Enter the raw key without an Authorization header or authentication prefix." }
 }
 
 Write-Phase "2" "App Registration and API permissions"
@@ -2220,6 +2331,8 @@ if ($SkipLogicApp) {
 
 Write-Phase "5" "Verification"
 $verificationFailures = [System.Collections.Generic.List[string]]::new()
+$sandboxLogicState = if ($SkipLogicApp) { "SKIPPED (-SkipLogicApp)" } else { "NOT DEPLOYED (Defender admin consent pending)" }
+$feedsLogicState = $sandboxLogicState
 if ($deploySandbox) {
   try { Wait-FunctionRegistration -FunctionAppName $SandboxFunctionName -FunctionName "ANYRUN-Sandbox-MDE-FA" -Attempts 1 }
   catch { $verificationFailures.Add($_.Exception.Message) }
@@ -2266,7 +2379,12 @@ if ($verificationFailures.Count -eq 0) {
   }
 }
 
-Write-Banner "Deployment summary"
+$logicAppsIncomplete = $SkipLogicApp -or ($deploySandbox -and $sandboxIdentity.ConsentDeferred) -or ($deployFeeds -and $feedsIdentity.ConsentDeferred)
+if ($verificationFailures.Count -gt 0 -or $logicAppsIncomplete) {
+  Write-Banner "Deployment summary - INCOMPLETE"
+} else {
+  Write-Banner "Deployment summary"
+}
 Write-Host "  Resource group : $ResourceGroup" -ForegroundColor White
 Write-Host "  Region         : $Region" -ForegroundColor White
 Write-Host "  Instance       : $(if ($useLegacyNames) { 'legacy' } else { $InstanceName })" -ForegroundColor White
@@ -2275,14 +2393,14 @@ if ($deploySandbox) {
   Write-Host ""
   Write-Host "  Sandbox App Registration : $($sandboxIdentity.DisplayName) ($($sandboxIdentity.ClientId))" -ForegroundColor White
   Write-Host "  Sandbox Function App     : $SandboxFunctionName" -ForegroundColor White
-  Write-Host "  Sandbox Logic App        : $SandboxLogicAppName" -ForegroundColor White
+  Write-Host "  Sandbox Logic App        : $SandboxLogicAppName [$sandboxLogicState]" -ForegroundColor $(if ($sandboxLogicState -eq 'Succeeded') { 'White' } else { 'Yellow' })
   Write-Host "  Sandbox Storage          : $($sandboxStorage.Name)" -ForegroundColor White
 }
 if ($deployFeeds) {
   Write-Host ""
   Write-Host "  Feeds App Registration   : $($feedsIdentity.DisplayName) ($($feedsIdentity.ClientId))" -ForegroundColor White
   Write-Host "  Feeds Function App       : $FeedsFunctionName" -ForegroundColor White
-  Write-Host "  Feeds Logic App          : $FeedsLogicAppName" -ForegroundColor White
+  Write-Host "  Feeds Logic App          : $FeedsLogicAppName [$feedsLogicState]" -ForegroundColor $(if ($feedsLogicState -eq 'Succeeded') { 'White' } else { 'Yellow' })
   Write-Host "  Feeds Storage            : $($feedsStorage.Name)" -ForegroundColor White
 }
 
@@ -2337,8 +2455,14 @@ if ($verificationFailures.Count -gt 0) {
   $verificationFailures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
   throw "Deployment completed with verification failures. Review the messages above before using the connector."
 }
-if ($script:DeferredConsentUrls.Count -gt 0) {
-  Write-Host "Function deployment finished, but connector activation is incomplete until admin consent and the Logic App continuation run succeed." -ForegroundColor Yellow
+if ($logicAppsIncomplete) {
+  Write-Host "PARTIAL DEPLOYMENT: connector activation is incomplete; Logic App deployment was skipped or Defender admin consent is pending." -ForegroundColor Yellow
+  if ($SkipLogicApp) {
+    Write-Host "Resume with the same connector, resource group and instance name, without -SkipLogicApp. Use -SkipFunctionApp to reuse the verified Function App." -ForegroundColor Yellow
+  }
+  if (($deploySandbox -and $sandboxIdentity.ConsentDeferred) -or ($deployFeeds -and $feedsIdentity.ConsentDeferred)) {
+    Write-Host "Grant Defender admin consent, then run the continuation command shown above to deploy the Logic App." -ForegroundColor Yellow
+  }
 } else {
   Write-Host "Deployment finished. API keys and client secrets were not printed." -ForegroundColor Green
 }

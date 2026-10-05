@@ -17,7 +17,7 @@ name from that principal, Storage Account, and role.
 
 The Sandbox App Registration needs these Microsoft Defender for Endpoint
 application permissions: `Alert.ReadWrite.All`, `Machine.LiveResponse`,
-`Machine.Read.All`, `Machine.ReadWrite.All`, `Ti.ReadWrite`, and
+`Machine.ReadWrite.All`, `Ti.ReadWrite`, and
 `Library.Manage`. The automated installer grants this exact set after explicit
 administrator approval.
 

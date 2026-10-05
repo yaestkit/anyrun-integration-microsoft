@@ -158,14 +158,15 @@ Deployment requirements and tenant verification steps are in
 |----------------------|---------------------|------------------------------------------------------------------------|
 | Alert                | Alert.ReadWrite.All | Needed to enrich alerts with sample information                        |
 | Machine              | Machine.LiveResponse | Starts and cancels Live Response actions                              |
-| Machine              | Machine.Read.All    | Retrieves machine information                                         |
-| Machine              | Machine.ReadWrite.All | Lists and reads MachineAction objects and downloads Live Response results |
+| Machine              | Machine.ReadWrite.All | Reads machine information and MachineAction objects; downloads Live Response results |
 | Ti                   | Ti.ReadWrite        | Submits indicators found by ANY.RUN                                   |
 | Library              | Library.Manage      | Needed to upload custom ps1 script for retrieving AV related evidences |
 
 `Machine.ReadWrite.All` is required for application tokens by the
 `machineactions` and `GetLiveResponseResultDownloadLink` APIs. Granting only
 `Machine.LiveResponse` is not sufficient for this connector.
+A separate `Machine.Read.All` permission is unnecessary when
+`Machine.ReadWrite.All` is granted.
 
 ### Storage Account
 
