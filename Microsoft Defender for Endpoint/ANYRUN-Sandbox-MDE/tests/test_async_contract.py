@@ -165,6 +165,19 @@ class AsyncContractTests(unittest.TestCase):
         self.assertEqual(self.status_store.touch.call_count, 2)
         lost.set.assert_not_called()
 
+    def test_verdict_progress_does_not_write_another_heartbeat(self):
+        def process(**kwargs):
+            kwargs['status_callback']('waiting_for_verdict', {'anyrun_task_status': 'RUNNING'})
+            return [{'task_uuid': 'paid-task'}]
+
+        module, _ = self._load_worker_for_test('single_heartbeat_worker', process)
+        module.main(FakeQueueMessage(self.payload()))
+        self.status_store.touch.assert_not_called()
+        progress = [call for call in self.status_store.update.call_args_list
+                    if call.kwargs.get('state') == 'waiting_for_verdict']
+        self.assertEqual(len(progress), 1)
+        self.assertEqual(progress[0].kwargs['anyrun_task_status'], 'RUNNING')
+
     def test_lost_lease_stops_heartbeats(self):
         module, _ = self._load_worker_for_test('lease_lost_worker', Mock())
         stop, lease, lost = Mock(), Mock(), Mock()
@@ -590,8 +603,6 @@ class AsyncContractTests(unittest.TestCase):
         self.status_store.update.side_effect = [
             None,
             RuntimeError('temporary blob failure'),
-            RuntimeError('temporary blob failure'),
-            RuntimeError('temporary blob failure'),
             None,
         ]
         payload = {
@@ -609,6 +620,8 @@ class AsyncContractTests(unittest.TestCase):
             if call.kwargs.get('state') == 'completed'
         ]
         self.assertEqual(len(completed), 1)
+        self.assertEqual(self.status_store.update.call_count, 3)
+        module.time.sleep.assert_not_called()
 
     def test_initial_status_failure_does_not_abort_analysis(self):
         process_alert = Mock(return_value=[{'task_uuid': 'task-1'}])

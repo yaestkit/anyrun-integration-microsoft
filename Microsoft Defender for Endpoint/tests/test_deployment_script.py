@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import unittest
+import zipfile
 from pathlib import Path
 
 
@@ -165,6 +166,25 @@ class DeploymentScriptTests(unittest.TestCase):
         }
         for parameter, path in expected.items():
             self.assertEqual(self.parameter_default(parameter), sha256(path), parameter)
+
+    def test_powershell_and_azureapp_share_runtime_packages_and_source(self):
+        for kind, connector, folder in (
+            ("Sandbox", "ANYRUN-Sandbox-MDE", "Sandbox"),
+            ("Feeds", "ANYRUN-TI-Feeds-MDE", "TI-Feeds"),
+        ):
+            with self.subTest(connector=connector):
+                name = f"ANYRUN-{kind}-MDE-FA.zip"
+                standalone = ROOT / connector / "Function App" / name
+                azureapp = ROOT.parent / "AzureApp" / "1.1.3" / folder / "artifacts" / name
+                self.assertEqual(standalone.read_bytes(), azureapp.read_bytes())
+                with zipfile.ZipFile(standalone) as package:
+                    self.assertIsNone(package.testzip())
+                    for member in package.infolist():
+                        if member.is_dir():
+                            continue
+                        self.assertEqual(package.read(member),
+                                         (ROOT / connector / "src" / member.filename).read_bytes(),
+                                         member.filename)
 
     def test_function_dependencies_are_pinned_and_hashed(self):
         for connector in ("ANYRUN-Sandbox-MDE", "ANYRUN-TI-Feeds-MDE"):

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.1.3.0",
+  "contentVersion": "1.1.4.0",
   "metadata": {
     "description": "ANY.RUN Sandbox for Microsoft Defender for Endpoint : Function App (starter, queue worker, status) + Logic App that detonates files and URLs from new MDE alerts in ANY.RUN and enriches the alerts."
   },
@@ -113,15 +113,15 @@
     }
   },
   "variables": {
-    "baseName": "[if(empty(parameters('instanceName')), 'anyrun-sandbox-mde', concat('anyrun-sandbox-mde-', parameters('instanceName')))]",
+    "baseName": "[if(empty(parameters('instanceName')), 'anyrun-sandbox-mde', concat('ANYRUN-Sandbox-MDE-', parameters('instanceName')))]",
     "nameHash": "[if(empty(parameters('instanceName')), uniqueString(resourceGroup().id), take(uniqueString(resourceGroup().id, parameters('instanceName')), 6))]",
-    "functionAppName": "[concat(variables('baseName'), '-', variables('nameHash'))]",
-    "hostingPlanName": "[if(empty(parameters('instanceName')), variables('functionAppName'), concat(variables('baseName'), '-plan'))]",
-    "appInsightsName": "[if(empty(parameters('instanceName')), variables('functionAppName'), concat(variables('baseName'), '-ai'))]",
-    "newWorkspaceName": "[if(empty(parameters('instanceName')), concat(variables('functionAppName'), '-law'), concat(variables('baseName'), '-law'))]",
-    "logicAppName": "[if(empty(parameters('instanceName')), 'ANYRUN-Sandbox-MDE-LA', concat(variables('baseName'), '-la'))]",
+    "functionAppName": "[if(empty(parameters('instanceName')), concat(variables('baseName'), '-', variables('nameHash')), concat(variables('baseName'), '-', variables('nameHash'), '-FA'))]",
+    "hostingPlanName": "[if(empty(parameters('instanceName')), variables('functionAppName'), concat(variables('baseName'), '-Plan'))]",
+    "appInsightsName": "[if(empty(parameters('instanceName')), variables('functionAppName'), concat(variables('baseName'), '-AI'))]",
+    "newWorkspaceName": "[if(empty(parameters('instanceName')), concat(variables('functionAppName'), '-law'), concat(variables('baseName'), '-LAW'))]",
+    "logicAppName": "[if(empty(parameters('instanceName')), 'ANYRUN-Sandbox-MDE-LA', concat(variables('baseName'), '-LA'))]",
     "storageAccountName": "[take(concat('anyrunsb', variables('nameHash'), parameters('instanceName')), 24)]",
-    "wdatpConnectionName": "[if(empty(parameters('instanceName')), 'wdatp--anyrun-app', concat(variables('baseName'), '-wdatp'))]",
+    "wdatpConnectionName": "[if(empty(parameters('instanceName')), 'wdatp--anyrun-app', concat(variables('baseName'), '-WDATP'))]",
     "createWorkspace": "[empty(parameters('logAnalyticsWorkspaceResourceId'))]",
     "workspaceResourceId": "[if(variables('createWorkspace'), resourceId('Microsoft.OperationalInsights/workspaces', variables('newWorkspaceName')), parameters('logAnalyticsWorkspaceResourceId'))]",
     "deploymentContainerName": "anyrundeploymentcontainer",

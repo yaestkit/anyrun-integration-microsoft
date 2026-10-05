@@ -70,7 +70,7 @@ class AnyRunFeeds:
             'Content-Type': 'application/json',
         }
 
-    def process_enrichment(self) -> dict[str, int]:
+    def process_enrichment(self) -> dict[str, object]:
         """ Initializes IOCs enrichment """
         with FeedsConnector(
             api_key=get_env_variable('ANYRUN_api_key'),
@@ -104,9 +104,9 @@ class AnyRunFeeds:
                     'with this fetched set.', ANYRUN_FEED_LIMIT,
                 )
             if payloads:
-                imported, rejected = self._load_indicators(payloads)
+                imported, rejected, rejection_details = self._load_indicators(payloads)
             else:
-                imported, rejected = 0, 0
+                imported, rejected, rejection_details = 0, 0, []
             summary = {
                 'downloaded': downloaded_count,
                 'selected': len(selected_indicators),
@@ -117,13 +117,10 @@ class AnyRunFeeds:
                 'deleted': deleted,
                 'imported': imported,
                 'rejected': rejected,
+                'rejection_details': rejection_details,
+                'rejection_details_truncated': rejected > len(rejection_details),
             }
             self._log.info('IOC enrichment summary: %s', json.dumps(summary, sort_keys=True))
-            if rejected:
-                raise RunTimeException(
-                    f'Microsoft Defender rejected {rejected} of {len(payloads)} indicators; '
-                    'the full refresh is incomplete. Retry after resolving the import errors.'
-                )
             return summary
 
     def _delete_indicators(self, indicators: list[str]) -> int:
@@ -267,7 +264,7 @@ class AnyRunFeeds:
     def _load_indicators(
         self,
         indicators: list[dict],
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, list[dict]]:
         """
         Loads actual indicators to the XDR
 
@@ -304,6 +301,7 @@ class AnyRunFeeds:
                 len(chunk_failures),
             )
 
+        sample = []
         if failures:
             sample = [
                 {
@@ -312,7 +310,7 @@ class AnyRunFeeds:
                 }
                 for source, result in failures[:10]
             ]
-            self._log.error(
+            self._log.warning(
                 'Microsoft Defender rejected %s indicators. First failures: %s',
                 len(failures),
                 json.dumps(sample, ensure_ascii=False),
@@ -322,7 +320,7 @@ class AnyRunFeeds:
             imported,
             len(failures),
         )
-        return imported, len(failures)
+        return imported, len(failures), sample
 
     def _make_request(
         self,

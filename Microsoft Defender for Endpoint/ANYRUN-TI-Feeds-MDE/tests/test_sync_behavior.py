@@ -85,7 +85,7 @@ class SyncBehaviorTests(unittest.TestCase):
             'indicatorValue': 'same.example', 'action': 'Audit',
         }])
         feeds._delete_indicators = Mock(return_value=1)
-        feeds._load_indicators = Mock(return_value=(len(payloads), 0))
+        feeds._load_indicators = Mock(return_value=(len(payloads), 0, []))
         return feeds, payloads
 
     def test_unchanged_indicators_are_deleted_and_imported_again(self):
@@ -156,11 +156,14 @@ class SyncBehaviorTests(unittest.TestCase):
             feeds.process_enrichment()
         feeds._delete_indicators.assert_called_once_with(['old-id'])
 
-    def test_partial_import_rejection_fails_the_refresh(self):
+    def test_partial_import_rejection_returns_counts_and_reasons(self):
         feeds, _ = self.configured()
-        feeds._load_indicators.return_value = (0, 1)
-        with self.assertRaisesRegex(RunTimeException, 'full refresh is incomplete'):
-            feeds.process_enrichment()
+        details = [{'indicator': 'same.example', 'failureReason': 'Invalid indicator value'}]
+        feeds._load_indicators.return_value = (0, 1, details)
+        summary = feeds.process_enrichment()
+        self.assertEqual(summary['rejected'], 1)
+        self.assertEqual(summary['rejection_details'], details)
+        self.assertFalse(summary['rejection_details_truncated'])
 
     def test_http_200_partial_rejection_is_detected_by_real_import(self):
         feeds = make_feeds(self.module)
@@ -172,7 +175,9 @@ class SyncBehaviorTests(unittest.TestCase):
         ))
         payloads = [{'indicatorType': 'DomainName', 'indicatorValue': name}
                     for name in ('one.example', 'two.example')]
-        self.assertEqual(feeds._load_indicators(payloads), (1, 1))
+        self.assertEqual(feeds._load_indicators(payloads), (1, 1, [
+            {'indicator': 'two.example', 'failureReason': 'Tenant quota exceeded'},
+        ]))
 
     def test_repeated_ten_thousand_object_refresh_does_not_accumulate(self):
         feeds = make_feeds(self.module)

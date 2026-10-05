@@ -36,7 +36,7 @@
         "visible": true,
         "options": {
           "style": "Info",
-          "text": "All resources of this deployment are named after the instance name, for example anyrun-feeds-mde-<instance name>-la. A random name is suggested, so this deployment creates a new instance. To update an existing instance, replace it with that instance's name (see the Instance tag on its resources; \"default\" means the field was left empty)."
+          "text": "Resource names use this instance, for example ANYRUN-Feeds-MDE-<instance>-LA and ANYRUN-Feeds-MDE-<instance>-<hash>-FA. The suggested random name creates a new instance. To update an existing instance, enter its name (see the Instance tag on its resources). An empty instance name keeps the resource names of version 1.1.1."
         }
       },
       {
@@ -45,7 +45,7 @@
         "visible": true,
         "options": {
           "style": "Warning",
-          "text": "Each TI Feeds instance must use its own app registration. An instance removes indicators created by its client ID that are not in its own feed, so two instances sharing one app registration overwrite each other."
+          "text": "Each TI Feeds instance must use its own app registration. Every refresh removes all indicators created by its client ID and imports the current feed, so two instances sharing one app registration overwrite each other."
         }
       },
       {

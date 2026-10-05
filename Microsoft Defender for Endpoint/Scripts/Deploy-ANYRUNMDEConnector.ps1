@@ -41,6 +41,8 @@ param(
   [string]$SubscriptionId,
   [ValidatePattern('^[^<>%&:\\?/#]{1,90}(?<!\.)$')]
   [string]$ResourceGroup,
+  [ValidatePattern('^[a-z0-9]{0,12}$', Options = 'None')]
+  [string]$InstanceName,
   [string]$Region = "eastus",
   [string]$LogAnalyticsWorkspaceName,
   [switch]$ForceGraphDeviceCode,
@@ -99,7 +101,7 @@ param(
   [string]$FeedsFunctionTemplateUri,
   [string]$FeedsLogicTemplateUri,
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxPackageSha256 = "ffbda7d9f3a806e05aa696ca490bdc62a455e91d4930372c2b91c4dc61d4d44d",
+  [string]$SandboxPackageSha256 = "821594cfddaf9ceb32e7330ca9da8f4cfac4950b55b928206f37d7a93ee19bf4",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
   [string]$FeedsPackageSha256 = "38256d0fbfebc09037ebb9ddf6eea40f272edd7c350747496a5ba5838244f843",
   [ValidatePattern('^[0-9a-fA-F]{64}$')]
@@ -129,6 +131,9 @@ $script:DeferredConsentUrls = [System.Collections.Generic.List[string]]::new()
 $script:DeferredConnectorLabels = [System.Collections.Generic.List[string]]::new()
 $sandboxStorageNameWasPassed = $PSBoundParameters.ContainsKey("SandboxStorageAccountName")
 $feedsStorageNameWasPassed = $PSBoundParameters.ContainsKey("FeedsStorageAccountName")
+$instanceNameWasPassed = $PSBoundParameters.ContainsKey("InstanceName")
+$sandboxDisplayNameWasPassed = $PSBoundParameters.ContainsKey("SandboxAppDisplayName")
+$feedsDisplayNameWasPassed = $PSBoundParameters.ContainsKey("FeedsAppDisplayName")
 $regionWasPassed = $PSBoundParameters.ContainsKey("Region")
 $sandboxAppIdWasPassed = $PSBoundParameters.ContainsKey("SandboxAppId")
 $feedsAppIdWasPassed = $PSBoundParameters.ContainsKey("FeedsAppId")
@@ -666,6 +671,89 @@ function Get-StableSuffix {
   } finally {
     $sha.Dispose()
   }
+}
+
+function Get-AzureAppNameHash {
+  param(
+    [Parameter(Mandatory = $true)][string]$ResourceGroupName,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[a-z0-9]{1,12}$', Options = 'None')][string]$InstanceName
+  )
+
+  # Evaluate the same ARM expression as Azure App 1.1.3. This incremental
+  # deployment contains no resources and never handles connector credentials.
+  $template = @{
+    '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#'
+    contentVersion = '1.0.0.0'
+    parameters = @{ instanceName = @{ type = 'string' } }
+    resources = @()
+    outputs = @{ nameHash = @{ type = 'string'; value = "[take(uniqueString(resourceGroup().id, parameters('instanceName')), 6)]" } }
+  }
+  $deployment = New-AzResourceGroupDeployment -Name "ANYRUN-MDE-Names-$InstanceName" `
+    -ResourceGroupName $ResourceGroupName -Mode Incremental -TemplateObject $template `
+    -TemplateParameterObject @{ instanceName = $InstanceName } -ErrorAction Stop
+  if ($deployment.ProvisioningState -ne 'Succeeded') {
+    throw "Resource naming evaluation failed: $($deployment.ProvisioningState)."
+  }
+  $hash = [string]$deployment.Outputs['nameHash'].Value
+  if ($hash -cnotmatch '^[a-z2-7]{6}$') { throw 'ARM returned an invalid resource-name hash.' }
+  return $hash
+}
+
+function Get-ConnectorDefaultNames {
+  param(
+    [Parameter(Mandatory = $true)][ValidateSet('Sandbox', 'Feeds', 'Both')][string]$ConnectorType,
+    [AllowEmptyString()][ValidatePattern('^[a-z0-9]{0,12}$', Options = 'None')][string]$InstanceName,
+    [string]$NameHash,
+    [string]$LegacySuffix
+  )
+
+  if ([string]::IsNullOrEmpty($InstanceName)) {
+    if ($LegacySuffix -cnotmatch '^[a-f0-9]{8}$') { throw 'Legacy naming requires the original installer suffix.' }
+    return @{
+      SandboxFunctionName = "anyrun-sandbox-mde-$LegacySuffix"
+      SandboxLogicAppName = "ANYRUN-Sandbox-MDE-LA-$LegacySuffix"
+      SandboxStorageAccountName = "arsb$LegacySuffix"
+      FeedsFunctionName = "anyrun-feeds-mde-$LegacySuffix"
+      FeedsLogicAppName = "ANYRUN-Feeds-MDE-LA-$LegacySuffix"
+      FeedsStorageAccountName = "arfd$LegacySuffix"
+      LogAnalyticsWorkspaceName = "anyrun-mde-law-$LegacySuffix"
+    }
+  }
+  if ($NameHash -cnotmatch '^[a-z2-7]{6}$') { throw 'Instance naming requires the six-character ARM hash.' }
+  $sandboxBase = "ANYRUN-Sandbox-MDE-$InstanceName"
+  $feedsBase = "ANYRUN-Feeds-MDE-$InstanceName"
+  $workspaceBase = switch ($ConnectorType) {
+    Sandbox { $sandboxBase }
+    Feeds { $feedsBase }
+    Both { "ANYRUN-MDE-$InstanceName" }
+  }
+  $sandboxStorage = "anyrunsb$NameHash$InstanceName"
+  $feedsStorage = "anyrunfeeds$NameHash$InstanceName"
+  return @{
+    SandboxFunctionName = "$sandboxBase-$NameHash-FA"
+    SandboxLogicAppName = "$sandboxBase-LA"
+    SandboxStorageAccountName = $sandboxStorage.Substring(0, [Math]::Min(24, $sandboxStorage.Length))
+    FeedsFunctionName = "$feedsBase-$NameHash-FA"
+    FeedsLogicAppName = "$feedsBase-LA"
+    FeedsStorageAccountName = $feedsStorage.Substring(0, [Math]::Min(24, $feedsStorage.Length))
+    LogAnalyticsWorkspaceName = "$workspaceBase-LAW"
+  }
+}
+
+function Select-ExistingResourceName {
+  param(
+    [Parameter(Mandatory = $true)][string]$PreferredName,
+    [Parameter(Mandatory = $true)][string]$ResourceType,
+    [string[]]$PreviousNames = @(),
+    [object[]]$Resources = @()
+  )
+
+  if (-not $Resources) { return $PreferredName }
+  foreach ($candidate in (@($PreferredName) + $PreviousNames)) {
+    $existing = @($Resources | Where-Object { $_.ResourceType -eq $ResourceType -and $_.Name -eq $candidate })
+    if ($existing.Count -gt 0) { return [string]$existing[0].Name }
+  }
+  return $PreferredName
 }
 
 function Get-ArmGuid {
@@ -1309,6 +1397,39 @@ function Remove-LegacyStorageRoleAssignment {
   }
 }
 
+function Set-FunctionSupportingResourceNames {
+  param(
+    [Parameter(Mandatory = $true)][object]$Template,
+    [Parameter(Mandatory = $true)][string]$BaseName,
+    [Parameter(Mandatory = $true)][string]$FunctionAppName,
+    [object[]]$Resources = @()
+  )
+
+  $planName = Select-ExistingResourceName -PreferredName "$BaseName-Plan" `
+    -ResourceType 'Microsoft.Web/serverfarms' -PreviousNames @($FunctionAppName) -Resources $Resources
+  $insightsName = Select-ExistingResourceName -PreferredName "$BaseName-AI" `
+    -ResourceType 'Microsoft.Insights/components' -PreviousNames @($FunctionAppName) -Resources $Resources
+  $plan = @($Template.resources | Where-Object type -eq 'Microsoft.Web/serverfarms')
+  $insights = @($Template.resources | Where-Object type -eq 'Microsoft.Insights/components')
+  if ($plan.Count -ne 1 -or $insights.Count -ne 1) {
+    throw 'The reviewed Function template must contain one hosting plan and one Application Insights resource.'
+  }
+  $Template.variables | Add-Member -NotePropertyName hostingPlanName -NotePropertyValue $planName -Force
+  $Template.variables | Add-Member -NotePropertyName appInsightsName -NotePropertyValue $insightsName -Force
+  $plan[0].name = "[variables('hostingPlanName')]"
+  $insights[0].name = "[variables('appInsightsName')]"
+  # Rewrite only resourceId calls for these two resource types. Function,
+  # storage, managed-identity and role-assignment references keep their targets.
+  $json = $Template | ConvertTo-Json -Depth 100
+  $json = [regex]::Replace($json,
+    "(?i)resourceId\('Microsoft.Web/serverfarms',\s*parameters\('functionAppName'\)\)",
+    "resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))")
+  $json = [regex]::Replace($json,
+    "(?i)resourceId\('Microsoft.Insights/components',\s*parameters\('functionAppName'\)\)",
+    "resourceId('Microsoft.Insights/components', variables('appInsightsName'))")
+  return ($json | ConvertFrom-Json)
+}
+
 function New-PreparedFunctionTemplate {
   param(
     [Parameter(Mandatory = $true)][string]$TemplateUri,
@@ -1406,6 +1527,11 @@ function New-PreparedFunctionTemplate {
       $roleDeploymentNameExpression = "'$escapedRoleDeploymentName'"
     }
     $extension.dependsOn = @("[resourceId('Microsoft.Resources/deployments', $roleDeploymentNameExpression)]")
+  }
+  if (-not $useLegacyNames) {
+    $functionAppName = if ($ConnectorType -eq 'Sandbox') { $SandboxFunctionName } else { $FeedsFunctionName }
+    $template = Set-FunctionSupportingResourceNames -Template $template `
+      -BaseName "ANYRUN-$ConnectorType-MDE-$InstanceName" -FunctionAppName $functionAppName -Resources $existingResources
   }
   $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $temporaryPath -Encoding utf8NoBOM
   Write-Host "  Pinned $ConnectorType packageUri to immutable commit '$($script:ResolvedRepositoryRef)'." -ForegroundColor DarkGray
@@ -1731,7 +1857,12 @@ Write-Host "  Connector    : $Connector" -ForegroundColor White
 if (-not (Confirm-Action "  Continue with this tenant and subscription?" $true)) { throw "Deployment cancelled." }
 
 if (-not $ResourceGroup) {
-  $ResourceGroup = Read-Text -Prompt "Resource group name" -Default "rg-anyrun-mde"
+  $defaultResourceGroup = "ANYRUN-MDE-RG"
+  # Keep the original default group on upgrades when it already exists.
+  if (Get-AzResourceGroup -Name "rg-anyrun-mde" -ErrorAction SilentlyContinue) {
+    $defaultResourceGroup = "rg-anyrun-mde"
+  }
+  $ResourceGroup = Read-Text -Prompt "Resource group name" -Default $defaultResourceGroup
 }
 if ($ResourceGroup -notmatch '^[^<>%&:\\?/#]{1,90}(?<!\.)$') {
   throw "Resource group name '$ResourceGroup' contains invalid characters or ends with a period."
@@ -1754,18 +1885,65 @@ $resourceGroupObject = Ensure-ResourceGroup -Name $ResourceGroup -Location $Regi
 $Region = $resourceGroupObject.Location
 
 $stableSuffix = Get-StableSuffix -InputText "$TenantId|$SubscriptionId|$ResourceGroup" -Length 8
-if (-not $LogAnalyticsWorkspaceName) { $LogAnalyticsWorkspaceName = "anyrun-mde-law-$stableSuffix" }
+$existingResources = @()
+if ($existingResourceGroup) {
+  $existingResources = @(Get-AzResource -ResourceGroupName $ResourceGroup -ErrorAction Stop)
+}
+$legacyNames = Get-ConnectorDefaultNames -ConnectorType $Connector -InstanceName '' -LegacySuffix $stableSuffix
+$resourceNameTypes = @{
+  SandboxFunctionName = 'Microsoft.Web/sites'; FeedsFunctionName = 'Microsoft.Web/sites'
+  SandboxLogicAppName = 'Microsoft.Logic/workflows'; FeedsLogicAppName = 'Microsoft.Logic/workflows'
+  SandboxStorageAccountName = 'Microsoft.Storage/storageAccounts'; FeedsStorageAccountName = 'Microsoft.Storage/storageAccounts'
+  LogAnalyticsWorkspaceName = 'Microsoft.OperationalInsights/workspaces'
+}
+$hasLegacyResources = $false
+foreach ($key in $resourceNameTypes.Keys) {
+  if (@($existingResources | Where-Object {
+    $_.ResourceType -eq $resourceNameTypes[$key] -and $_.Name -eq $legacyNames[$key]
+  }).Count -gt 0) { $hasLegacyResources = $true; break }
+}
+$useLegacyNames = [string]::IsNullOrEmpty($InstanceName) -and ($instanceNameWasPassed -or $hasLegacyResources)
+if ($useLegacyNames) {
+  $defaultNames = $legacyNames
+  Write-Step "Reusing the original installer resource names..."
+} else {
+  if (-not $InstanceName) {
+    # Unlike the portal's random suggestion, keep the installer default stable
+    # for this tenant/subscription/group so an unattended re-run is an update.
+    $defaultInstance = Get-StableSuffix -InputText ("$TenantId|$SubscriptionId|$ResourceGroup".ToLowerInvariant()) -Length 6
+    $InstanceName = Read-Text -Prompt "Instance name (reuse the same value for updates)" `
+      -Default $defaultInstance -ValidationPattern '^[a-z0-9]{1,12}$' `
+      -ValidationMessage 'Use 1 to 12 lowercase letters or digits.'
+    $InstanceName = $InstanceName.ToLowerInvariant()
+  }
+  Write-Step "Resolving Azure App resource names for instance '$InstanceName'..."
+  $nameHash = Get-AzureAppNameHash -ResourceGroupName $ResourceGroup -InstanceName $InstanceName
+  $defaultNames = Get-ConnectorDefaultNames -ConnectorType $Connector -InstanceName $InstanceName -NameHash $nameHash
+  if (-not $sandboxDisplayNameWasPassed) { $SandboxAppDisplayName = "ANYRUN-Sandbox-MDE-$InstanceName-$nameHash-Connector" }
+  if (-not $feedsDisplayNameWasPassed) { $FeedsAppDisplayName = "ANYRUN-Feeds-MDE-$InstanceName-$nameHash-Connector" }
+}
+
+# Explicit names always win. Case-insensitive matching preserves the casing
+# returned by Azure and keeps existing resources instead of creating duplicates.
+foreach ($key in $resourceNameTypes.Keys) {
+  if ((-not $deploySandbox -and $key.StartsWith('Sandbox')) -or
+      (-not $deployFeeds -and $key.StartsWith('Feeds'))) { continue }
+  if (-not (Get-Variable -Name $key -ValueOnly)) {
+    $previousNames = @()
+    if (-not $useLegacyNames -and $key.EndsWith('FunctionName')) {
+      # Azure App 1.1.3 originally used a lowercase name without the FA suffix.
+      $previousNames = @($defaultNames[$key].Substring(0, $defaultNames[$key].Length - 3).ToLowerInvariant())
+    }
+    $resolvedName = Select-ExistingResourceName -PreferredName $defaultNames[$key] `
+      -ResourceType $resourceNameTypes[$key] -PreviousNames $previousNames -Resources $existingResources
+    Set-Variable -Name $key -Value $resolvedName
+  }
+}
 if ($deploySandbox) {
-  if (-not $SandboxFunctionName)       { $SandboxFunctionName = "anyrun-sandbox-mde-$stableSuffix" }
-  if (-not $SandboxLogicAppName)       { $SandboxLogicAppName = "ANYRUN-Sandbox-MDE-LA-$stableSuffix" }
-  if (-not $SandboxStorageAccountName) { $SandboxStorageAccountName = "arsb$stableSuffix" }
   Assert-FunctionName -Name $SandboxFunctionName
   Assert-LogicAppName -Name $SandboxLogicAppName
 }
 if ($deployFeeds) {
-  if (-not $FeedsFunctionName)       { $FeedsFunctionName = "anyrun-feeds-mde-$stableSuffix" }
-  if (-not $FeedsLogicAppName)       { $FeedsLogicAppName = "ANYRUN-Feeds-MDE-LA-$stableSuffix" }
-  if (-not $FeedsStorageAccountName) { $FeedsStorageAccountName = "arfd$stableSuffix" }
   Assert-FunctionName -Name $FeedsFunctionName
   Assert-LogicAppName -Name $FeedsLogicAppName
 }
@@ -2091,6 +2269,7 @@ if ($verificationFailures.Count -eq 0) {
 Write-Banner "Deployment summary"
 Write-Host "  Resource group : $ResourceGroup" -ForegroundColor White
 Write-Host "  Region         : $Region" -ForegroundColor White
+Write-Host "  Instance       : $(if ($useLegacyNames) { 'legacy' } else { $InstanceName })" -ForegroundColor White
 Write-Host "  Log Analytics  : $LogAnalyticsWorkspaceName" -ForegroundColor White
 if ($deploySandbox) {
   Write-Host ""
@@ -2117,6 +2296,7 @@ if ($script:DeferredConsentUrls.Count -gt 0) {
   $continuationArguments.Add("-TenantId $(ConvertTo-PowerShellLiteral $TenantId)")
   $continuationArguments.Add("-SubscriptionId $(ConvertTo-PowerShellLiteral $SubscriptionId)")
   $continuationArguments.Add("-ResourceGroup $(ConvertTo-PowerShellLiteral $ResourceGroup)")
+  $continuationArguments.Add("-InstanceName $(ConvertTo-PowerShellLiteral $InstanceName)")
   $continuationArguments.Add("-Region $(ConvertTo-PowerShellLiteral $Region)")
   $continuationArguments.Add("-LogAnalyticsWorkspaceName $(ConvertTo-PowerShellLiteral $LogAnalyticsWorkspaceName)")
   $continuationArguments.Add("-Repository $(ConvertTo-PowerShellLiteral $Repository)")

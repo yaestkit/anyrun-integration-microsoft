@@ -231,6 +231,17 @@ enriches the alert. `DisableAsyncPattern` applies only to the short starter call
 the Logic App then uses explicit status polling instead of keeping that HTTP
 request open.
 
+One background thread renews the worker lease and writes periodic heartbeats.
+Verdict polling publishes progress only when it changes; remaining-time updates
+are limited to once per minute, while changes of task status are immediate.
+Optional progress writes are best-effort single attempts. Durable checkpoints
+and terminal results retain bounded retries. Comment checkpoints skip completed
+steps; recovery also checks existing Defender comments before replaying an
+unfinished comment. Fresh analyses do not perform these extra comment GETs.
+
+This optimization does not change the SDK, TLS certificate-verification
+settings, queue retries, Live Response timing or the two Logic App wait stages.
+
 In **Logic App > Runs history**, open a run and expand these actions:
 
 - **Evidence submitted to ANY.RUN** — job ID, evidence name/type, file SHA-256,

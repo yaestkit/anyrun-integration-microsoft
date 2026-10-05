@@ -32,7 +32,7 @@ Connect TI Feeds with MDE for an easy access to all the benefits it brings:
 - Microsoft Defender for Endpoint
 - [ANY.RUN TI Feeds subscription](https://intelligence.any.run/plans/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=ms_defender_tifeeds&utm_content=linktotiplans) and ANY.RUN’s API key (without a prefix). To obtain one, [reach out to our sales team](https://any.run/enterprise/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=microsoftdefender&utm_content=linktoenterprise#contact-sales).
 - Microsoft Azure resources:
-  - Logic App with Flex Consumption plan
+  - Logic App (Consumption)
   - Function App Flex Consumption plan
 
 Note:
@@ -102,13 +102,30 @@ Download, authorization or preparation errors stop the run before deletion.
 
 Deletion and import are separate API operations: indicators are temporarily
 absent during replacement. If import fails, the set may remain incomplete until
-a later successful run. Partial import rejection is reported as an error.
+a later successful run. Partial per-indicator rejection returns HTTP 200 with status
+`completed_with_warnings`, accepted/rejected counts, and up to ten rejection
+details. Failed requests, authorization errors, deletion failures, and invalid
+import responses still return HTTP 500.
 Microsoft documents a tenant-wide limit of 15,000 active indicators, shared with
 other sources; full refresh prevents this app's previous batches from accumulating,
 but does not reserve capacity against indicators from other integrations.
 [Microsoft API limits](https://learn.microsoft.com/en-us/defender-endpoint/api/import-ti-indicators).
 
 ## Deployment
+
+You can deploy the same Feeds runtime in either of these ways:
+
+- Azure App: use `AzureApp/1.1.3/anyrun-ti-feeds-mde-1.1.3.zip` (includes the
+  Function package, ARM template and deployment UI).
+- PowerShell: use [`Deploy-ANYRUNMDEConnector.ps1`](../Scripts/Deploy-ANYRUNMDEConnector.ps1)
+  with `-Connector Feeds` or `-Connector Both`; see
+  [automated deployment](../AUTOMATED-DEPLOYMENT.md).
+
+The standalone Function template and ZIP are in `Function App/`. That ZIP is
+identical to `AzureApp/1.1.3/TI-Feeds/artifacts/ANYRUN-Feeds-MDE-FA.zip`; the
+installer verifies its SHA-256 before deployment. Merge/publish all reviewed
+files together before running the installer against the repository.
+
 
 ### Deploy Azure Function App
 

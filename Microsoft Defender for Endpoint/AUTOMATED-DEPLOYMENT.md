@@ -3,6 +3,20 @@
 `Scripts/Deploy-ANYRUNMDEConnector.ps1` deploys the Sandbox connector, the TI
 Feeds connector, or both from Azure Cloud Shell (PowerShell).
 
+The Feeds standalone deployment files are included at:
+
+- `ANYRUN-TI-Feeds-MDE/Function App/ANYRUN-Feeds-MDE-FA.json`
+- `ANYRUN-TI-Feeds-MDE/Function App/ANYRUN-Feeds-MDE-FA.zip`
+- `ANYRUN-TI-Feeds-MDE/Logic App/ANYRUN-Feeds-MDE-LA.json`
+
+The installer resolves these paths at the reviewed repository commit and checks
+the template/package hashes. Each standalone Function ZIP is identical to its
+Azure App 1.1.3 `artifacts/` ZIP, including the ZIP nested in the deployable
+`anyrun-*-mde-1.1.3.zip` bundle. Both deployment methods therefore use the same
+Sandbox/Feeds runtime. Publish the installer, standalone templates/packages and
+Azure App bundles together before deploying from the repository.
+
+
 Sandbox recovery follow-up (2026-10-01) requires updating the Function ZIP and
 the submission loop limits (480 / PT2H). See the recovery section in
 [`ANYRUN-Sandbox-MDE/README.md`](ANYRUN-Sandbox-MDE/README.md#recovery-after-a-worker-restart).
@@ -15,8 +29,7 @@ the GitHub-based installer; do not bypass a hash mismatch.
 The installer creates highly privileged workload identities. Use a dedicated
 App Registration and a dedicated resource group for each environment. Anyone
 who can read or change Function App configuration in that resource group may be
-able to use the stored ANY.RUN key and Defender client credential. Review the
-writer list printed during pre-flight and remove unnecessary `Owner`,
+able to use the stored ANY.RUN key and Defender client credential. Review resource-group role assignments in Azure and remove unnecessary `Owner`,
 `Contributor`, `Website Contributor`, and `User Access Administrator` access.
 
 The installer applies these controls:
@@ -299,11 +312,49 @@ official release branch in the same commit, then recalculate template hashes.
 
 ## Re-deployment and migration
 
-Default names contain a deterministic suffix derived from tenant, subscription,
-and resource group, making re-runs stable. Historical role assignments are
-removed only when their exact legacy deterministic name and current Function
-managed-identity principal both match. The installer does not delete unrelated
-assignments.
+New installations use the naming convention from Azure App 1.1.3. The default
+resource group is `ANYRUN-MDE-RG`; an existing `rg-anyrun-mde` is still offered
+when upgrading the original installer. Azure App itself uses the resource group
+selected in the Azure deployment UI and does not assign its name.
+
+Use `-InstanceName demo01` to choose an instance (1 to 12 lowercase letters or
+digits). The interactive installer suggests a stable six-character value derived
+from tenant, subscription and resource group; unattended re-runs use that same
+value. Azure App's UI suggests a random six-character value instead. To update an
+instance, use the same resource group and instance name.
+
+| Resource | Example for Feeds |
+| --- | --- |
+| Logic App | `ANYRUN-Feeds-MDE-demo01-LA` |
+| Function App | `ANYRUN-Feeds-MDE-demo01-<hash>-FA` |
+| Hosting plan | `ANYRUN-Feeds-MDE-demo01-Plan` |
+| Application Insights | `ANYRUN-Feeds-MDE-demo01-AI` |
+| Log Analytics workspace | `ANYRUN-Feeds-MDE-demo01-LAW` |
+| Storage Account | `anyrunfeeds<hash>demo01` |
+
+Sandbox uses `ANYRUN-Sandbox-MDE` and the storage prefix `anyrunsb`. The installer
+shares `ANYRUN-MDE-demo01-LAW` when deploying both connectors. The hash is exactly
+`take(uniqueString(resourceGroup().id, instanceName), 6)`, evaluated by an
+incremental ARM deployment with no resources. Storage names remain lowercase,
+contain no hyphens and are limited to 24 characters. New Entra registration names
+include the instance and hash so separate instances get separate identities.
+
+Explicit resource-name parameters keep priority. When the original installer's
+resources are found and no instance is specified, its old defaults are retained.
+For a named Azure App instance, the installer reuses an existing Function App
+without the new `-FA` suffix. Other existing names are matched without regard to
+case, including old hosting-plan and Insights names. These changes do not rename
+existing Azure resources.
+
+When updating through Azure App 1.1.3, enter the same instance and fill in
+**Existing Function App name (updates only)** if the original Function name did
+not end in `-FA`; otherwise a new Function App would be created. An empty
+instance retains version 1.1.1 resource names. Use a new instance value only when
+intending to create another connector.
+
+Historical role assignments are removed only when their exact legacy
+deterministic name and current Function managed-identity principal both match.
+The installer does not delete unrelated assignments.
 
 Older Function templates that still contain `WaitSection` are rejected. Upgrade
 to the reviewed checked-in templates, which use a nested scoped role assignment
@@ -334,3 +385,19 @@ Before production:
 The repository tests and ARM validation are release checks, not substitutes for
 an Azure tenant test. A successful first deployment and re-deployment in a
 non-production tenant/subscription remain mandatory release gates.
+
+## Offline verification
+
+Run the installer orchestration checks in PowerShell 7:
+
+```powershell
+./tests/test_installer_artifact_flow.ps1
+./tests/test_resource_naming.ps1
+```
+
+The first test runs the actual installer for Sandbox, Feeds and Both with local
+artifact downloads and stubbed Azure/Graph calls. It retains real SHA-256, ZIP
+checks, ARM parameter binding and template preparation, and verifies failure
+before identity writes if a file is missing or a package hash differs. These
+checks do not establish live Azure Policy, tenant permissions or runtime
+connectivity.
