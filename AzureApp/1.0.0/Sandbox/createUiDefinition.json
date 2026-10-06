@@ -40,6 +40,16 @@
         }
       },
       {
+        "name": "rbacInfo",
+        "type": "Microsoft.Common.InfoBox",
+        "visible": true,
+        "options": {
+          "style": "Info",
+          "text": "The deployment assigns the Function App's managed identity the Storage Blob Data Contributor role on the Storage Account it creates. Your Azure account needs permission to create role assignments on the selected resource group (Microsoft.Authorization/roleAssignments/write), for example Owner, User Access Administrator or Role Based Access Control Administrator. Contributor alone is not enough.",
+          "uri": "https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-template"
+        }
+      },
+      {
         "name": "flexRegions",
         "type": "Microsoft.Solutions.ArmApiControl",
         "request": {
@@ -221,8 +231,16 @@
             "toolTip": "Private blob container in the dedicated Storage Account where Live Response uploads evidence files.",
             "constraints": {
               "required": true,
-              "regex": "^[a-z0-9](?!.*--)[a-z0-9-]{1,61}[a-z0-9]$",
-              "validationMessage": "3-63 characters: lowercase letters, digits and single hyphens; must start and end with a letter or digit."
+              "validations": [
+                {
+                  "regex": "^[a-z0-9](?!.*--)[a-z0-9-]{1,61}[a-z0-9]$",
+                  "message": "3-63 characters: lowercase letters, digits and single hyphens; must start and end with a letter or digit."
+                },
+                {
+                  "isValid": "[and(not(equals(steps('storage').evidenceContainer, 'anyrundeploymentcontainer')), not(equals(steps('storage').evidenceContainer, 'anyrun-job-status')))]",
+                  "message": "anyrundeploymentcontainer and anyrun-job-status are reserved for the connector's internal containers. Use another name."
+                }
+              ]
             }
           },
           {
