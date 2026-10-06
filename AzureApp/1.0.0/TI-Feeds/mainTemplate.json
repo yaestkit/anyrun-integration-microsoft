@@ -14,10 +14,11 @@
     },
     "instanceName": {
       "type": "string",
-      "defaultValue": "",
+      "defaultValue": "[take(uniqueString(resourceGroup().id), 6)]",
+      "minLength": 1,
       "maxLength": 12,
       "metadata": {
-        "description": "Instance name (up to 12 lowercase letters and digits) used in the names of all resources of this deployment. A new value creates a new instance; an existing value updates that instance."
+        "description": "Instance name (1-12 lowercase letters and digits) used in the names of all resources of this deployment. A new value creates a new instance; an existing value updates that instance."
       }
     },
     "logAnalyticsWorkspaceResourceId": {
@@ -43,7 +44,7 @@
     "azureClientId": {
       "type": "string",
       "metadata": {
-        "description": "Application (client) ID of the app registration with WindowsDefenderATP Ti.* permissions."
+        "description": "Application (client) ID of the app registration with the WindowsDefenderATP Ti.ReadWrite permission."
       }
     },
     "azureClientSecret": {
@@ -106,13 +107,13 @@
     }
   },
   "variables": {
-    "baseName": "[if(empty(parameters('instanceName')), 'anyrun-feeds-mde', concat('ANYRUN-Feeds-MDE-', parameters('instanceName')))]",
-    "nameHash": "[if(empty(parameters('instanceName')), uniqueString(resourceGroup().id), take(uniqueString(resourceGroup().id, parameters('instanceName')), 6))]",
-    "functionAppName": "[if(empty(parameters('instanceName')), concat(variables('baseName'), '-', variables('nameHash')), concat(variables('baseName'), '-', variables('nameHash'), '-FA'))]",
-    "hostingPlanName": "[if(empty(parameters('instanceName')), variables('functionAppName'), concat(variables('baseName'), '-Plan'))]",
-    "appInsightsName": "[if(empty(parameters('instanceName')), variables('functionAppName'), concat(variables('baseName'), '-AI'))]",
-    "newWorkspaceName": "[if(empty(parameters('instanceName')), concat(variables('functionAppName'), '-law'), concat(variables('baseName'), '-LAW'))]",
-    "logicAppName": "[if(empty(parameters('instanceName')), 'ANYRUN-Feeds-MDE-LA', concat(variables('baseName'), '-LA'))]",
+    "baseName": "[concat('ANYRUN-Feeds-MDE-', parameters('instanceName'))]",
+    "nameHash": "[take(uniqueString(resourceGroup().id, parameters('instanceName')), 6)]",
+    "functionAppName": "[concat(variables('baseName'), '-', variables('nameHash'), '-FA')]",
+    "hostingPlanName": "[concat(variables('baseName'), '-Plan')]",
+    "appInsightsName": "[concat(variables('baseName'), '-AI')]",
+    "newWorkspaceName": "[concat(variables('baseName'), '-LAW')]",
+    "logicAppName": "[concat(variables('baseName'), '-LA')]",
     "storageAccountName": "[take(concat('anyrunfeeds', variables('nameHash'), parameters('instanceName')), 24)]",
     "createWorkspace": "[empty(parameters('logAnalyticsWorkspaceResourceId'))]",
     "workspaceResourceId": "[if(variables('createWorkspace'), resourceId('Microsoft.OperationalInsights/workspaces', variables('newWorkspaceName')), parameters('logAnalyticsWorkspaceResourceId'))]",
@@ -122,7 +123,7 @@
     "resourceTags": {
       "Vendor": "ANY.RUN",
       "Solution": "ANY.RUN TI Feeds for Microsoft Defender for Endpoint",
-      "Instance": "[if(empty(parameters('instanceName')), 'default', parameters('instanceName'))]"
+      "Instance": "[parameters('instanceName')]"
     },
     "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
   },
@@ -467,7 +468,7 @@
     },
     "instanceName": {
       "type": "string",
-      "value": "[if(empty(parameters('instanceName')), 'default', parameters('instanceName'))]"
+      "value": "[parameters('instanceName')]"
     }
   }
 }

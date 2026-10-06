@@ -23,11 +23,11 @@
         "type": "Microsoft.Common.TextBox",
         "label": "Instance name",
         "defaultValue": "[toLower(take(replace(guid(), '-', ''), 6))]",
-        "toolTip": "Used in the names of all resources of this deployment. Keep the suggested random value to create a new instance, or enter the name of an existing instance to update it. Up to 12 lowercase letters and digits.",
+        "toolTip": "Used in the names of all resources of this deployment. Keep the suggested random value to create a new instance, or enter the name of an existing instance to update it. 1-12 lowercase letters and digits.",
         "constraints": {
-          "required": false,
-          "regex": "^[a-z0-9]{0,12}$",
-          "validationMessage": "Use up to 12 lowercase letters and digits."
+          "required": true,
+          "regex": "^[a-z0-9]{1,12}$",
+          "validationMessage": "Use 1-12 lowercase letters and digits."
         }
       },
       {
@@ -191,17 +191,17 @@
             "name": "privacyType",
             "type": "Microsoft.Common.DropDown",
             "label": "Analysis visibility",
-            "defaultValue": "By link (bylink)",
+            "defaultValue": "Bylink",
             "toolTip": "Specify the visibility of analysis results.",
             "constraints": {
               "required": true,
               "allowedValues": [
                 {
-                  "label": "By link (bylink)",
+                  "label": "Bylink",
                   "value": "bylink"
                 },
                 {
-                  "label": "Private (owner)",
+                  "label": "Owner",
                   "value": "owner"
                 }
               ]
