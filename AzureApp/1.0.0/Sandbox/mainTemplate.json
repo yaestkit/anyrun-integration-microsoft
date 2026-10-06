@@ -57,7 +57,7 @@
         "owner"
       ],
       "metadata": {
-        "description": "ANY.RUN analysis visibility. 'owner' requires a plan that supports private analyses."
+        "description": "Specify the visibility of analysis results."
       }
     },
     "azureTenantId": {

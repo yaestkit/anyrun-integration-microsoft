@@ -6,7 +6,7 @@
     "config": {
       "isWizard": true,
       "basics": {
-        "description": "Automate suspicious file and URL analysis and bring detailed behavioral context directly into Microsoft Defender for Endpoint.\n\n[ANY.RUN’s Interactive Sandbox](https://any.run/features/?utm_source=ms-defender-marketplace-sb&utm_medium=ms-defender-marketplace-sb&utm_campaign=ms-defender-marketplace-sb&utm_content=linktosandboxlanding) integrates seamlessly with Microsoft Defender for Endpoint (MDE) to streamline alert triage, accelerate threat investigation, and eliminate manual analysis overhead for SOC teams and incident responders.\n\n* Accelerate Alert Triage & Response: Automatically submit suspicious files and URLs extracted from MDE alerts directly to ANY.RUN for real-time detonation.\n* Real-Time Behavioral Context: Receive immediate verdicts, extracted IOCs, and direct links to live interactive analysis sessions within your Microsoft Defender workflow.",
+        "description": "Automate suspicious file and URL analysis and bring detailed behavioral context directly into Microsoft Defender for Endpoint.\n\n[ANY.RUN’s Interactive Sandbox](https://any.run/features/?utm_source=ms-defender-marketplace-sb&utm_medium=ms-defender-marketplace-sb&utm_campaign=ms-defender-marketplace-sb&utm_content=linktosandboxlanding) integrates seamlessly with Microsoft Defender for Endpoint (MDE) to streamline alert triage, accelerate threat investigation, and eliminate manual analysis overhead for SOC teams and incident responders.\n\n* Accelerate Alert Triage & Response: Automatically submit suspicious files and URLs extracted from MDE alerts directly to ANY.RUN for real-time detonation.\n* Real-Time Behavioral Context: Receive immediate verdicts, extracted IOCs, and direct links to live interactive analysis sessions within your Microsoft Defender workflow.\n* Automated SOC Playbooks: Configure flexible automated submission rules based on alert properties to handle high-volume threats with minimal manual intervention.\n* Seamless Threat Intelligence Integration: Add newly discovered IOCs to Microsoft Defender for Endpoint as custom indicators (Audit or Block) for proactive enterprise-wide defense.",
         "location": {
           "label": "Region",
           "toolTip": "Region for all resources.",
@@ -192,7 +192,7 @@
             "type": "Microsoft.Common.DropDown",
             "label": "Analysis visibility",
             "defaultValue": "By link (bylink)",
-            "toolTip": "Private analyses require an ANY.RUN plan that supports them.",
+            "toolTip": "Specify the visibility of analysis results.",
             "constraints": {
               "required": true,
               "allowedValues": [
