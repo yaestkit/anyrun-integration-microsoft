@@ -36,7 +36,7 @@
         "visible": true,
         "options": {
           "style": "Info",
-          "text": "Resource names use this instance, for example ANYRUN-Feeds-MDE-<instance>-LA and ANYRUN-Feeds-MDE-<instance>-<hash>-FA. The suggested random name creates a new instance. To update an existing instance, enter its name (see the Instance tag on its resources). An empty instance name keeps the resource names of version 1.1.1."
+          "text": "Resource names use this instance, for example ANYRUN-Feeds-MDE-<instance>-LA and ANYRUN-Feeds-MDE-<instance>-<hash>-FA. The suggested random name creates a new instance. To update an existing instance, enter its name (see the Instance tag on its resources)."
         }
       },
       {

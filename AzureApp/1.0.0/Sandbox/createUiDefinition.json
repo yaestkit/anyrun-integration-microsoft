@@ -6,7 +6,7 @@
     "config": {
       "isWizard": true,
       "basics": {
-        "description": "**ANY.RUN Sandbox for Microsoft Defender for Endpoint** automatically detonates files and URLs from new Defender for Endpoint alerts in the ANY.RUN Interactive Sandbox. The alert is enriched with the verdict, threat score, a link to the analysis and IOCs, and the IOCs are imported as Defender indicators.\n\nThe deployment creates a Function App (Flex Consumption), a Logic App with a Defender for Endpoint connection, a dedicated Storage Account and Application Insights in the selected resource group.\n\nEach deployment creates a new instance; all its resources share the instance name. To update an existing instance, enter its instance name on this page.",
+        "description": "Automate suspicious file and URL analysis and bring detailed behavioral context directly into Microsoft Defender for Endpoint.\n\n[ANY.RUN’s Interactive Sandbox](https://any.run/features/?utm_source=ms-defender-marketplace-sb&utm_medium=ms-defender-marketplace-sb&utm_campaign=ms-defender-marketplace-sb&utm_content=linktosandboxlanding) integrates seamlessly with Microsoft Defender for Endpoint (MDE) to streamline alert triage, accelerate threat investigation, and eliminate manual analysis overhead for SOC teams and incident responders.\n\n* Accelerate Alert Triage & Response: Automatically submit suspicious files and URLs extracted from MDE alerts directly to ANY.RUN for real-time detonation.\n* Real-Time Behavioral Context: Receive immediate verdicts, extracted IOCs, and direct links to live interactive analysis sessions within your Microsoft Defender workflow.",
         "location": {
           "label": "Region",
           "toolTip": "Region for all resources.",
@@ -36,16 +36,7 @@
         "visible": true,
         "options": {
           "style": "Info",
-          "text": "Resource names use this instance, for example ANYRUN-Sandbox-MDE-<instance>-LA and ANYRUN-Sandbox-MDE-<instance>-<hash>-FA. The suggested random name creates a new instance. To update an existing instance, enter its name (see the Instance tag on its resources). An empty instance name keeps the resource names of version 1.1.1."
-        }
-      },
-      {
-        "name": "instanceWarning",
-        "type": "Microsoft.Common.InfoBox",
-        "visible": true,
-        "options": {
-          "style": "Warning",
-          "text": "Each Sandbox instance subscribes to all new alerts of its Defender tenant. Two instances connected to the same tenant analyze every alert twice unless their Logic Apps use different alert filters."
+          "text": "Resource names use this instance, for example ANYRUN-Sandbox-MDE-<instance>-LA and ANYRUN-Sandbox-MDE-<instance>-<hash>-FA. The suggested random name creates a new instance. To update an existing instance, enter its name (see the Instance tag on its resources)."
         }
       },
       {
@@ -78,7 +69,7 @@
             "options": {
               "style": "Info",
               "text": "Before you continue: create an app registration in Microsoft Entra ID and grant it the WindowsDefenderATP application permissions Alert.ReadWrite.All, Machine.LiveResponse, Machine.ReadWrite.All, Ti.ReadWrite and Library.Manage with admin consent, then create a client secret. Use a dedicated app registration for this connector. Click here for step-by-step instructions.",
-              "uri": "https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#microsoft-defender-atp-api-permissions-for-new-app"
+              "uri": "https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#app-registration"
             }
           },
           {
@@ -201,7 +192,7 @@
             "type": "Microsoft.Common.DropDown",
             "label": "Analysis visibility",
             "defaultValue": "By link (bylink)",
-            "toolTip": "Private tasks require an ANY.RUN plan that supports them.",
+            "toolTip": "Private analyses require an ANY.RUN plan that supports them.",
             "constraints": {
               "required": true,
               "allowedValues": [

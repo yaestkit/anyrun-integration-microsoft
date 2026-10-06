@@ -17,7 +17,7 @@
       "defaultValue": "",
       "maxLength": 12,
       "metadata": {
-        "description": "Instance name (up to 12 lowercase letters and digits) used in the names of all resources of this deployment. A new value creates a new instance; an existing value updates that instance. Empty keeps the resource names of version 1.1.1."
+        "description": "Instance name (up to 12 lowercase letters and digits) used in the names of all resources of this deployment. A new value creates a new instance; an existing value updates that instance."
       }
     },
     "logAnalyticsWorkspaceResourceId": {
