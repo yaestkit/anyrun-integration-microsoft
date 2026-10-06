@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.1.4.0",
+  "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "ANY.RUN Sandbox for Microsoft Defender for Endpoint : Function App (starter, queue worker, status) + Logic App that detonates files and URLs from new MDE alerts in ANY.RUN and enriches the alerts."
+    "description": "ANY.RUN Sandbox for Microsoft Defender for Endpoint: Function App (starter, queue worker, status) + Logic App that detonates files and URLs from new MDE alerts in ANY.RUN and enriches the alerts."
   },
   "parameters": {
     "location": {
@@ -133,7 +133,7 @@
     {
       "condition": "[variables('createWorkspace')]",
       "type": "Microsoft.OperationalInsights/workspaces",
-      "apiVersion": "2025-02-01",
+      "apiVersion": "2025-07-01",
       "name": "[variables('newWorkspaceName')]",
       "location": "[parameters('location')]",
       "tags": "[variables('resourceTags')]",
@@ -161,7 +161,7 @@
     },
     {
       "type": "Microsoft.Storage/storageAccounts",
-      "apiVersion": "2025-01-01",
+      "apiVersion": "2025-06-01",
       "name": "[variables('storageAccountName')]",
       "location": "[parameters('location')]",
       "sku": {
@@ -179,7 +179,7 @@
     },
     {
       "type": "Microsoft.Storage/storageAccounts/blobServices",
-      "apiVersion": "2025-01-01",
+      "apiVersion": "2025-06-01",
       "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
@@ -187,7 +187,7 @@
     },
     {
       "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
-      "apiVersion": "2025-01-01",
+      "apiVersion": "2025-06-01",
       "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', variables('deploymentContainerName'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]"
@@ -198,7 +198,7 @@
     },
     {
       "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
-      "apiVersion": "2025-01-01",
+      "apiVersion": "2025-06-01",
       "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', parameters('evidenceContainerName'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]"
@@ -209,7 +209,7 @@
     },
     {
       "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
-      "apiVersion": "2025-01-01",
+      "apiVersion": "2025-06-01",
       "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', variables('jobStatusContainerName'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]"
@@ -221,7 +221,7 @@
     {
       "condition": "[parameters('configureEvidenceLifecyclePolicy')]",
       "type": "Microsoft.Storage/storageAccounts/managementPolicies",
-      "apiVersion": "2025-01-01",
+      "apiVersion": "2025-06-01",
       "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', variables('storageAccountName'), 'default', parameters('evidenceContainerName'))]",
@@ -315,7 +315,7 @@
           "deployment": {
             "storage": {
               "type": "blobContainer",
-              "value": "[concat(reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-01-01').primaryEndpoints.blob, variables('deploymentContainerName'))]",
+              "value": "[concat(reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-06-01').primaryEndpoints.blob, variables('deploymentContainerName'))]",
               "authentication": {
                 "type": "SystemAssignedIdentity"
               }
@@ -348,7 +348,7 @@
             },
             {
               "name": "AzureWebJobsStorage",
-              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-01-01').keys[0].value)]"
+              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-06-01').keys[0].value)]"
             },
             {
               "name": "AzureBlobContainerName",
@@ -368,7 +368,7 @@
             },
             {
               "name": "AzureStorageAccountKey",
-              "value": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-01-01').keys[0].value]"
+              "value": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-06-01').keys[0].value]"
             },
             {
               "name": "AzureStorageAccountName",
@@ -376,7 +376,7 @@
             },
             {
               "name": "AzureStorageConnectionString",
-              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-01-01').keys[0].value)]"
+              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2025-06-01').keys[0].value)]"
             },
             {
               "name": "AzureTenantID",
@@ -409,18 +409,57 @@
       }
     },
     {
-      "scope": "[format('Microsoft.Storage/storageAccounts/{0}', variables('storageAccountName'))]",
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.Web/sites', variables('functionAppName')), variables('storageBlobDataContributorRoleId'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[take(concat('StorageRole-', variables('functionAppName')), 64)]",
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
         "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
       ],
       "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]",
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2025-05-01', 'Full').identity.principalId]",
-        "principalType": "ServicePrincipal"
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[variables('storageAccountName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2025-05-01', 'Full').identity.principalId]"
+          },
+          "roleDefinitionName": {
+            "value": "[variables('storageBlobDataContributorRoleId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "storageAccountName": {
+              "type": "string"
+            },
+            "principalId": {
+              "type": "string"
+            },
+            "roleDefinitionName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('principalId'), parameters('roleDefinitionName'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionName'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
       }
     },
     {
@@ -429,7 +468,7 @@
       "name": "[format('{0}/{1}', variables('functionAppName'), 'onedeploy')]",
       "dependsOn": [
         "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.Web/sites', variables('functionAppName')), variables('storageBlobDataContributorRoleId')))]",
+        "[resourceId('Microsoft.Resources/deployments', take(concat('StorageRole-', variables('functionAppName')), 64))]",
         "[resourceId('Microsoft.Web/sites/basicPublishingCredentialsPolicies', variables('functionAppName'), 'scm')]"
       ],
       "properties": {
@@ -1170,6 +1209,19 @@
               }
             }
           }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "pid-TRACKING-GUID-FROM-PARTNER-CENTER",
+      "properties": {
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "resources": []
         }
       }
     }

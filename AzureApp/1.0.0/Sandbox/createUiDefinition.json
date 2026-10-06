@@ -78,7 +78,7 @@
             "options": {
               "style": "Info",
               "text": "Before you continue: create an app registration in Microsoft Entra ID and grant it the WindowsDefenderATP application permissions Alert.ReadWrite.All, Machine.LiveResponse, Machine.ReadWrite.All, Ti.ReadWrite and Library.Manage with admin consent, then create a client secret. Use a dedicated app registration for this connector. Click here for step-by-step instructions.",
-              "uri": "https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#microsoft-defender-atp-api-permissions-for-new-app"
+              "uri": "https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#microsoft-defender-atp-api-permissions-for-new-app"
             }
           },
           {
@@ -88,7 +88,7 @@
             "options": {
               "style": "Warning",
               "text": "In the Microsoft Defender portal enable Settings > Endpoints > Advanced features: Live Response, Live Response for Servers and Live Response unsigned script execution. The connector uses Live Response to collect evidence files from devices.",
-              "uri": "https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#enable-live-response-sessions"
+              "uri": "https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE#enable-live-response-sessions"
             }
           },
           {

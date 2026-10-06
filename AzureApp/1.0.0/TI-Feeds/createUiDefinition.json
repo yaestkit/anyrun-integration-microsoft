@@ -77,8 +77,8 @@
             "visible": true,
             "options": {
               "style": "Info",
-              "text": "Create an app registration in Microsoft Entra ID and grant it the WindowsDefenderATP application permissions Ti.Read.All, Ti.ReadWrite and Ti.ReadWrite.All with admin consent. Then create a client secret and enter the values below. Click here for step-by-step instructions.",
-              "uri": "https://github.com/yaestkit/anyrun-integration-microsoft/tree/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE#app-registration"
+              "text": "Create an app registration in Microsoft Entra ID and grant it the WindowsDefenderATP application permission Ti.ReadWrite with admin consent. Use a dedicated app registration for this connector. Then create a client secret and enter the values below. Click here for step-by-step instructions.",
+              "uri": "https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/ANYRUN-TI-Feeds-MDE#app-registration"
             }
           },
           {
@@ -276,7 +276,7 @@
       "anyrunApiKey": "[steps('anyrun').apiKey]",
       "intervalRecurrence": "[steps('anyrun').intervalRecurrence]",
       "feedFetchDepth": "[steps('anyrun').feedFetchDepth]",
-      "minimumConfidenceThreshold": "[steps('anyrun').minimumConfidence]",
+      "minimum_confidence_threshold": "[steps('anyrun').minimumConfidence]",
       "logAnalyticsWorkspaceResourceId": "[if(equals(steps('monitoring').workspaceMode, 'existing'), steps('monitoring').workspace.id, '')]",
       "instanceName": "[basics('instanceName')]"
     }
