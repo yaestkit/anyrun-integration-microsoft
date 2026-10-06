@@ -45,7 +45,7 @@
         "visible": true,
         "options": {
           "style": "Info",
-          "text": "The deployment assigns the Function App's managed identity the Storage Blob Data Contributor role on the Storage Account it creates. Your Azure account needs permission to create role assignments on the selected resource group (Microsoft.Authorization/roleAssignments/write), for example Owner, User Access Administrator or Role Based Access Control Administrator. Contributor alone is not enough.",
+          "text": "Requires permission to create role assignments on the resource group: Owner, User Access Administrator or Role Based Access Control Administrator.",
           "uri": "https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-template"
         }
       },
