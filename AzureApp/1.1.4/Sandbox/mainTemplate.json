@@ -22,7 +22,7 @@
     },
     "evidenceContainerName": {
       "type": "string",
-      "defaultValue": "anyrun-evidence",
+      "defaultValue": "anyrun-quarantine",
       "minLength": 3,
       "maxLength": 63,
       "metadata": {
@@ -51,10 +51,10 @@
     },
     "analysisPrivacyType": {
       "type": "string",
-      "defaultValue": "owner",
+      "defaultValue": "bylink",
       "allowedValues": [
-        "owner",
-        "bylink"
+        "bylink",
+        "owner"
       ],
       "metadata": {
         "description": "ANY.RUN analysis visibility. 'owner' requires a plan that supports private tasks."
@@ -84,17 +84,11 @@
       "defaultValue": "Audit",
       "allowedValues": [
         "Audit",
-        "Block"
+        "Block",
+        "Disabled"
       ],
       "metadata": {
-        "description": "Action for indicators imported from ANY.RUN Sandbox."
-      }
-    },
-    "defenderIndicatorGenerateAlert": {
-      "type": "bool",
-      "defaultValue": false,
-      "metadata": {
-        "description": "Generate a Defender alert when an imported Sandbox indicator matches."
+        "description": "Defender action for IOCs found by ANY.RUN Sandbox: Audit (alert on match), Block, or Disabled (do not import IOCs; they stay in alert comments)."
       }
     },
     "_artifactsLocation": {
@@ -347,10 +341,6 @@
             {
               "name": "DefenderIndicatorAction",
               "value": "[parameters('defenderIndicatorAction')]"
-            },
-            {
-              "name": "DefenderIndicatorGenerateAlert",
-              "value": "[string(parameters('defenderIndicatorGenerateAlert'))]"
             },
             {
               "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",

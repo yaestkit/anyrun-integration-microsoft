@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-APP = ROOT / 'AzureApp' / '1.1.3'
+APP = ROOT / 'AzureApp' / '1.1.4'
 HASH = 'abcdefghi2345'
 
 
@@ -120,12 +120,12 @@ class AzureAppNamingTests(unittest.TestCase):
                 self.assertEqual(e.variable('appInsightsName'), fn)
                 self.assertEqual(e.variable('newWorkspaceName'), fn+'-law')
 
-    def test_existing_function_override_preserves_function_references(self):
+    def test_existing_function_override_was_removed(self):
+        # Azure App 1.1.4 removed the 1.1.2 test-instance override field.
         for kind in ('Sandbox', 'Feeds'):
-            e = NameExpressions(self.template(kind), 'demo01', 'existing-function-name')
-            self.assertEqual(e.variable('functionAppName'), 'existing-function-name')
-            t = json.dumps(self.template(kind))
-            self.assertIn("resourceId('Microsoft.Web/sites', variables('functionAppName'))", t)
+            t = self.template(kind)
+            self.assertNotIn('existingFunctionAppName', t['parameters'])
+            self.assertIn("resourceId('Microsoft.Web/sites', variables('functionAppName'))", json.dumps(t))
 
     def test_ui_outputs_and_case_sensitive_name_constraints(self):
         for folder, kind in [('Sandbox','Sandbox'), ('TI-Feeds','Feeds')]:
@@ -134,27 +134,20 @@ class AzureAppNamingTests(unittest.TestCase):
             fields = {x['name']: x for x in ui['basics']}
             instance = fields['instanceName']
             self.assertEqual(instance['defaultValue'], "[toLower(take(replace(guid(), '-', ''), 6))]")
-            self.assertEqual(ui['outputs']['existingFunctionAppName'], "[basics('existingFunctionAppName')]")
-            self.assertIn('existingFunctionAppName', t['parameters'])
+            self.assertNotIn('existingFunctionAppName', ui['outputs'])
+            self.assertNotIn('existingFunctionAppName', fields)
             self.assertIsNone(re.fullmatch(instance['constraints']['regex'], 'ABC'))
             self.assertIsNotNone(re.fullmatch(instance['constraints']['regex'], 'demo01'))
             self.assertIn(f'ANYRUN-{kind}-MDE-<instance>-LA', fields['instanceInfo']['options']['text'])
-            name_re = fields['existingFunctionAppName']['constraints']['regex']
-            self.assertIsNotNone(re.fullmatch(name_re, ''))
-            self.assertIsNotNone(re.fullmatch(name_re, f'ANYRUN-{kind}-MDE-demo01-abcdef-FA'))
-            self.assertIsNone(re.fullmatch(name_re, '-invalid'))
-            self.assertIsNone(re.fullmatch(name_re, 'a'*61))
 
     def test_nested_deployment_packages_match_the_edited_templates(self):
         for folder, stem in [('Sandbox','sandbox'), ('TI-Feeds','ti-feeds')]:
-            with zipfile.ZipFile(APP/f'anyrun-{stem}-mde-1.1.3.zip') as archive:
+            with zipfile.ZipFile(APP/f'anyrun-{stem}-mde-1.1.4.zip') as archive:
                 self.assertIsNone(archive.testzip())
                 for name in ('mainTemplate.json','createUiDefinition.json'):
                     self.assertEqual(archive.read(name), (APP/folder/name).read_bytes())
                 runtime=f'artifacts/ANYRUN-{ "Sandbox" if folder=="Sandbox" else "Feeds" }-MDE-FA.zip'
                 self.assertEqual(archive.read(runtime), (APP/folder/runtime).read_bytes())
-        self.assertEqual((APP/'anyrun-ti-feeds-mde-1.1.3.zip').read_bytes(),
-                         (APP.parent/'1.1.1/anyrun-ti-feeds-mde-1.1.3.zip').read_bytes())
 
 
 if __name__ == '__main__':

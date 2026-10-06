@@ -28,9 +28,10 @@ class DeploymentScriptTests(unittest.TestCase):
         cls.text = SCRIPT.read_text(encoding="utf-8")
         cls.doc = DOC.read_text(encoding="utf-8")
 
-    def parameter_default(self, name):
-        match = re.search(rf'\[string\]\${name}\s*=\s*"([0-9a-f]+)"', self.text)
-        self.assertIsNotNone(match, name)
+    def artifact_hash(self, connector, key):
+        block = self.text.split(f"  {connector} = @{{", 1)[1].split("\n  }", 1)[0]
+        match = re.search(rf'{key}Sha256 = "([0-9a-f]{{64}})"', block)
+        self.assertIsNotNone(match, f"{connector}.{key}")
         return match.group(1)
 
     def test_script_exists_and_has_balanced_delimiters(self):
@@ -42,7 +43,7 @@ class DeploymentScriptTests(unittest.TestCase):
 
     def test_modes_and_parameter_validation(self):
         self.assertIn('[ValidateSet("Sandbox", "Feeds")]', self.text)
-        self.assertIn('[ValidateSet("Audit", "Block")]', self.text)
+        self.assertIn('[ValidateSet("Audit", "Block", "Disabled")]', self.text)
         self.assertNotIn('[ValidateSet("Allowed",', self.text)
         self.assertIn('[ValidateRange(1, 100)]', self.text)
         self.assertIn("function Assert-GuidValue", self.text)
@@ -52,8 +53,8 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertNotIn('Sentinel', self.text)
         self.assertNotIn('IndicatorSource', self.text)
         self.assertNotIn('Sentinel', self.doc)
-        self.assertIn('if (-not $FeedsApiKey) { $FeedsApiKey = Read-RequiredSecret', self.text)
-        self.assertIn('anyrunApiKey                 = $FeedsApiKey', self.text)
+        self.assertIn('Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)"', self.text)
+        self.assertIn('$parameters.anyrunApiKey = $ApiKey', self.text)
 
     def test_feeds_first_run_schedule_matches_azureapp(self):
         standalone = json.loads(FEEDS_LOGIC.read_text(encoding="utf-8"))
@@ -75,7 +76,7 @@ class DeploymentScriptTests(unittest.TestCase):
         template = json.loads(SANDBOX_FUNCTION.read_text(encoding="utf-8"))
         parameter = template["parameters"]["DefenderIndicatorAction"]
         self.assertEqual(parameter["defaultValue"], "Audit")
-        self.assertEqual(parameter["allowedValues"], ["Audit", "Block"])
+        self.assertEqual(parameter["allowedValues"], ["Audit", "Block", "Disabled"])
         site = next(
             resource for resource in template["resources"]
             if resource["type"] == "Microsoft.Web/sites"
@@ -88,25 +89,25 @@ class DeploymentScriptTests(unittest.TestCase):
             settings["DefenderIndicatorAction"],
             "[parameters('DefenderIndicatorAction')]",
         )
-        self.assertFalse(
-            template["parameters"]["DefenderIndicatorGenerateAlert"]["defaultValue"]
-        )
-        self.assertEqual(
-            settings["DefenderIndicatorGenerateAlert"],
-            "[string(parameters('DefenderIndicatorGenerateAlert'))]",
-        )
-        self.assertIn("DefenderIndicatorAction = $DefenderIndicatorAction", self.text)
-        self.assertIn(
-            "DefenderIndicatorGenerateAlert = $DefenderIndicatorGenerateAlert",
-            self.text,
-        )
+        # Microsoft requires GenerateAlert for Audit; there is no opt-out switch.
+        self.assertNotIn("DefenderIndicatorGenerateAlert", template["parameters"])
+        self.assertNotIn("DefenderIndicatorGenerateAlert", settings)
+        self.assertNotIn("DefenderIndicatorGenerateAlert", self.text)
+        self.assertRegex(self.text, r"DefenderIndicatorAction\s+= \$DefenderIndicatorAction")
+        self.assertIn('-DefenderIndicatorAction Disabled applies only to Sandbox', self.text)
+        feeds = json.loads(FEEDS_FUNCTION.read_text(encoding="utf-8"))
+        self.assertEqual(feeds["parameters"]["DefenderIndicatorAction"]["allowedValues"], ["Audit", "Block"])
+        marketplace = json.loads(
+            (ROOT.parent / "AzureApp" / "1.1.4" / "Sandbox" / "mainTemplate.json").read_text(encoding="utf-8"))
+        self.assertEqual(marketplace["parameters"]["defenderIndicatorAction"]["allowedValues"], ["Audit", "Block", "Disabled"])
+        self.assertNotIn("defenderIndicatorGenerateAlert", marketplace["parameters"])
 
     def test_sandbox_privacy_is_explicit_and_configurable(self):
         logic = json.loads(SANDBOX_LOGIC.read_text(encoding="utf-8"))
         privacy = logic["parameters"]["analysisPrivacyType"]
-        self.assertEqual(privacy["defaultValue"], "owner")
-        self.assertEqual(privacy["allowedValues"], ["owner", "bylink"])
-        self.assertIn('[ValidateSet("owner", "bylink")]', self.text)
+        self.assertEqual(privacy["defaultValue"], "bylink")
+        self.assertEqual(privacy["allowedValues"], ["bylink", "owner"])
+        self.assertIn('[ValidateSet("bylink", "owner")]', self.text)
         self.assertIn("analysisPrivacyType = $SandboxAnalysisPrivacyType", self.text)
 
     def test_evidence_lifecycle_is_only_enabled_for_installer_created_storage(self):
@@ -123,8 +124,9 @@ class DeploymentScriptTests(unittest.TestCase):
             template["parameters"]["ConfigureEvidenceLifecyclePolicy"]["defaultValue"]
         )
         self.assertIn("Created                = $created", self.text)
+        self.assertIn("-ConfigureLifecyclePolicy ([bool]$storage.Created)", self.text)
         self.assertIn(
-            "ConfigureEvidenceLifecyclePolicy = [bool]$sandboxStorage.Created",
+            "$parameters.ConfigureEvidenceLifecyclePolicy = $ConfigureLifecyclePolicy",
             self.text,
         )
 
@@ -153,13 +155,13 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn("Disconnect-MgGraph", final)
 
     def test_reviewed_repository_ref_is_resolved_to_commit(self):
-        self.assertIn('[string]$Repository = "yaestkit/anyrun-integration-microsoft"', self.text)
-        self.assertIn('[string]$RepositoryRef = "refs/heads/asyncv2"', self.text)
+        self.assertIn('$Repository = "yaestkit/anyrun-integration-microsoft"', self.text)
+        self.assertIn('$RepositoryRef = "refs/heads/asyncv2"', self.text)
+        self.assertNotRegex(self.text, r"\[string\]\$Repository(Ref)?\s*=")
         body = self.text.split("function Resolve-RepositoryCommit", 1)[1]
         body = body.split("function Get-VerifiedRemoteFile", 1)[0]
         self.assertIn("api.github.com/repos/$RepositoryName/commits/$encodedRef", body)
         self.assertIn("^[0-9a-fA-F]{40}$", body)
-        self.assertLess(body.index("is not the reviewed repository for this test bundle"), body.index("^[0-9a-fA-F]{40}$"))
         self.assertIn("$script:ResolvedRepositoryRef = Resolve-RepositoryCommit", self.text)
 
     def test_remote_files_require_allowlisted_https_and_sha256(self):
@@ -167,21 +169,20 @@ class DeploymentScriptTests(unittest.TestCase):
         body = body.split("function Show-ResourceGroupWriteAccess", 1)[0]
         self.assertIn("raw.githubusercontent.com", body)
         self.assertIn("Get-FileHash", body)
-        self.assertIn("has no expected SHA-256", body)
         self.assertIn("SHA-256 mismatch", body)
-        self.assertIn("AllowUnverifiedArtifacts", body)
+        self.assertNotIn("AllowUnverifiedArtifacts", self.text)
 
     def test_built_in_hashes_match_all_reviewed_artifacts(self):
         expected = {
-            "SandboxPackageSha256": SANDBOX_PACKAGE,
-            "FeedsPackageSha256": FEEDS_PACKAGE,
-            "SandboxFunctionTemplateSha256": SANDBOX_FUNCTION,
-            "SandboxLogicTemplateSha256": SANDBOX_LOGIC,
-            "FeedsFunctionTemplateSha256": FEEDS_FUNCTION,
-            "FeedsLogicTemplateSha256": FEEDS_LOGIC,
+            ("Sandbox", "Package"): SANDBOX_PACKAGE,
+            ("Feeds", "Package"): FEEDS_PACKAGE,
+            ("Sandbox", "FunctionTemplate"): SANDBOX_FUNCTION,
+            ("Sandbox", "LogicTemplate"): SANDBOX_LOGIC,
+            ("Feeds", "FunctionTemplate"): FEEDS_FUNCTION,
+            ("Feeds", "LogicTemplate"): FEEDS_LOGIC,
         }
-        for parameter, path in expected.items():
-            self.assertEqual(self.parameter_default(parameter), sha256(path), parameter)
+        for (connector, key), path in expected.items():
+            self.assertEqual(self.artifact_hash(connector, key), sha256(path), f"{connector}.{key}")
 
     def test_powershell_and_azureapp_share_runtime_packages_and_source(self):
         for kind, connector, folder in (
@@ -191,7 +192,7 @@ class DeploymentScriptTests(unittest.TestCase):
             with self.subTest(connector=connector):
                 name = f"ANYRUN-{kind}-MDE-FA.zip"
                 standalone = ROOT / connector / "Function App" / name
-                azureapp = ROOT.parent / "AzureApp" / "1.1.3" / folder / "artifacts" / name
+                azureapp = ROOT.parent / "AzureApp" / "1.1.4" / folder / "artifacts" / name
                 self.assertEqual(standalone.read_bytes(), azureapp.read_bytes())
                 with zipfile.ZipFile(standalone) as package:
                     self.assertIsNone(package.testzip())
@@ -219,19 +220,32 @@ class DeploymentScriptTests(unittest.TestCase):
             self.assertIn(expected, template)
             self.assertNotRegex(template, r"raw\.githubusercontent\.com/[^/]+/[^/]+/[0-9a-f]{40}/")
 
-    def test_temporary_template_pins_package_to_resolved_commit(self):
-        body = self.text.split("function New-PreparedFunctionTemplate", 1)[1]
-        body = body.split("function New-RegionalLogicTemplate", 1)[0]
+    def test_package_parameter_is_pinned_to_resolved_commit(self):
+        body = self.text.split("function Get-ConnectorArtifacts", 1)[1]
+        body = body.split("function Get-FunctionTemplateParameters", 1)[0]
         self.assertIn("$script:ResolvedRepositoryRef", body)
-        self.assertIn("$extension.properties.packageUri = $packageUri", body)
         self.assertIn("Get-VerifiedRemoteFile", body)
         self.assertIn("[IO.Compression.ZipFile]::OpenRead", body)
+        self.assertIn("packageUri                   = $Names.PackageUri", self.text)
+        for path in (SANDBOX_FUNCTION, FEEDS_FUNCTION):
+            template = json.loads(path.read_text(encoding="utf-8"))
+            extension = next(r for r in template["resources"] if r["type"] == "Microsoft.Web/sites/extensions")
+            self.assertEqual(extension["properties"]["packageUri"], "[parameters('packageUri')]")
 
-    def test_old_wait_section_is_rejected_not_deleted(self):
-        body = self.text.split("function New-PreparedFunctionTemplate", 1)[1]
-        body = body.split("function New-RegionalLogicTemplate", 1)[0]
-        self.assertIn("still contains the obsolete WaitSection", body)
-        self.assertNotIn("$template.resources = @($template.resources | Where-Object", body)
+    def test_reviewed_templates_are_deployed_without_rewriting(self):
+        self.assertNotIn("ConvertTo-Json -Depth 100 | Set-Content", self.text)
+        self.assertNotIn("Set-FunctionSupportingResourceNames", self.text)
+        for path in (SANDBOX_FUNCTION, FEEDS_FUNCTION):
+            template = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(any(r["type"] == "Microsoft.Resources/deploymentScripts" for r in template["resources"]))
+            for name in ("hostingPlanName", "appInsightsName"):
+                self.assertEqual(template["parameters"][name]["defaultValue"], "[parameters('functionAppName')]")
+            plan = next(r for r in template["resources"] if r["type"] == "Microsoft.Web/serverfarms")
+            insights = next(r for r in template["resources"] if r["type"] == "Microsoft.Insights/components")
+            self.assertEqual(plan["name"], "[parameters('hostingPlanName')]")
+            self.assertEqual(insights["name"], "[parameters('appInsightsName')]")
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"resourceId\('Microsoft\.(Web/serverfarms|Insights/components)', parameters\('functionAppName'\)\)")
 
     def test_app_registration_binding_is_marked_and_validated(self):
         self.assertIn("anyrun-mde-installer:v1", self.text)
@@ -255,7 +269,7 @@ class DeploymentScriptTests(unittest.TestCase):
         sandbox = self.text.split("$sandboxRoles = @(", 1)[1].split(")", 1)[0]
         quoted = set(re.findall(r'"([A-Za-z.]+)"', sandbox))
         self.assertEqual(roles, quoted)
-        configured = self.text.split("$sandboxRoles = @(", 1)[1].split("$encodedRoot", 1)[0]
+        configured = self.text.split("$sandboxRoles = @(", 1)[1].split("function Write-Banner", 1)[0]
         for role in ("Ti.ReadWrite.All", "Ti.Read.All", "Alert.Read.All"):
             self.assertNotIn(f'"{role}"', configured)
 
@@ -267,7 +281,8 @@ class DeploymentScriptTests(unittest.TestCase):
     def test_placeholder_exists_for_logic_only_preflight(self):
         initialization = "$placeholderSecret = ConvertTo-SecureValue -Value \"preflight-placeholder\""
         self.assertIn(initialization, self.text)
-        self.assertLess(self.text.index(initialization), self.text.index("if (-not $SkipFunctionApp)"))
+        self.assertLess(self.text.index(initialization),
+                        self.text.index("if (-not $SkipFunctionApp) {\n  Test-ArmDeployment"))
 
     def test_function_templates_are_hardened_and_nested_rbac_is_scoped(self):
         for path in (SANDBOX_FUNCTION, FEEDS_FUNCTION):
@@ -288,6 +303,8 @@ class DeploymentScriptTests(unittest.TestCase):
             assignment = next(r for r in nested["properties"]["template"]["resources"] if r["type"] == "Microsoft.Authorization/roleAssignments")
             self.assertEqual(assignment["properties"]["principalType"], "ServicePrincipal")
             self.assertIn("Microsoft.Storage/storageAccounts", assignment["scope"])
+            # Flex Consumption deployment storage needs Storage Blob Data Contributor.
+            self.assertEqual(template["variables"]["storageRoleDefinitionId"], "ba92f5b4-2d11-453d-a403-e96b0029c9fe")
 
     def test_function_http_triggers_are_post_only(self):
         for connector in ("ANYRUN-Sandbox-MDE", "ANYRUN-TI-Feeds-MDE"):
@@ -328,7 +345,7 @@ class DeploymentScriptTests(unittest.TestCase):
 
     def test_legacy_role_cleanup_matches_name_and_principal(self):
         body = self.text.split("function Remove-LegacyStorageRoleAssignment", 1)[1]
-        body = body.split("function New-PreparedFunctionTemplate", 1)[0]
+        body = body.split("function Get-ConnectorArtifacts", 1)[0]
         self.assertIn("sites/$($FunctionAppName)?api-version=2024-11-01", body)
         self.assertNotRegex(body, r"\$[A-Za-z_][A-Za-z0-9_]*\?")
         self.assertIn('Get-ObjectPropertyValue -InputObject $site -Name "identity"', body)
@@ -336,6 +353,23 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertNotIn("$site.identity.principalId", body)
         self.assertIn("$legacyNames -contains $_.RoleAssignmentName", body)
         self.assertIn("$_.ObjectId.ToString() -eq $principalId", body)
+
+    def test_superseded_owner_role_is_removed_after_contributor_deployment(self):
+        body = self.text.split("function Remove-LegacyStorageRoleAssignment", 1)[1]
+        body = body.split("function Get-ConnectorArtifacts", 1)[0]
+        self.assertIn("if ($SupersededOwner)", body)
+        self.assertIn("$script:LegacyStorageBlobDataOwnerRoleId", body)
+        flow = self.text.split('Write-Phase "3" "Function App"', 1)[1].split('Write-Phase "4"', 1)[0]
+        self.assertLess(flow.index("Invoke-ArmDeployment"), flow.index("-SupersededOwner"))
+
+    def test_azure_rest_errors_are_reported_with_status(self):
+        body = self.text.split("function Invoke-AzRestJson", 1)[1].split("function Get-ObjectPropertyValue", 1)[0]
+        self.assertIn("returned HTTP $status", body)
+        for caller in ("function Assert-FunctionAppNameAvailable", "function Test-EffectiveRoleAssignmentPermission",
+                       "function Get-ExistingFunctionConfiguration"):
+            function = self.text.split(caller, 1)[1].split("\nfunction ", 1)[0]
+            self.assertIn("Invoke-AzRestJson", function, caller)
+            self.assertNotIn("ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod", function, caller)
 
     def test_dangerous_tenant_wide_settings_are_not_changed(self):
         self.assertNotIn("Set-MpPreference", self.text)

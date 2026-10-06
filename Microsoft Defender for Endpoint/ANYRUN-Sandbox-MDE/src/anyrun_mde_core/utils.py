@@ -116,7 +116,8 @@ def generate_analysis_summary_comment(
     evidence: str,
     analysis_verdict: str,
     score: int,
-    task_url: str
+    task_url: str,
+    indicators_imported: bool = True,
 ) -> str:
     """
     Generates text report using received parameters
@@ -125,16 +126,23 @@ def generate_analysis_summary_comment(
     :param analysis_verdict: Analysis Threat Level
     :param score: Analysis score
     :param task_url: Analysis url
+    :param indicators_imported: Whether IOC import into Defender is enabled
     :return: Text report
     """
+    indicators_note = (
+        'The indicators with Suspicious and Malicious severity can be found on the following path: '
+        'System/Settings/Endpoints/Rules/Indicators'
+        if indicators_imported else
+        'Indicator import into Microsoft Defender is disabled for this connector; '
+        'the indicators are listed only in the alert comments and the ANY.RUN report.'
+    )
     return (
         f'ANY.RUN analysis of Evidence results:\n\n'
         f'Evidence:\n{evidence}'
         f'\n\nVerdict:\n{analysis_verdict}'
         f'\n\nThreat score:\n{score}'
         f'\n\nLink to interactive report:\n{task_url}'
-        f'\n\nThe indicators with Suspicious and Malicious severity can be found on the following path: '
-        f'System/Settings/Endpoints/Rules/Indicators'
+        f'\n\n{indicators_note}'
     )
 
 

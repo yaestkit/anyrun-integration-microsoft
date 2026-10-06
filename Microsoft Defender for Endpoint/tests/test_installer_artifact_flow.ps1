@@ -60,7 +60,7 @@ function Ensure-ConnectorIdentity {
     ClientSecret=(ConvertTo-SecureString 'fixture-client-secret' -AsPlainText -Force);
     ConsentDeferred=$deferred;NewCredentialKeyId=$null;ApplicationObjectId='fixture-object'}
 }
-function Remove-LegacyStorageRoleAssignment { param($StorageAccountName,$FunctionAppName,$ConnectorType) }
+function Remove-LegacyStorageRoleAssignment { param($StorageAccountName,$FunctionAppName,$ConnectorType,[switch]$SupersededOwner) }
 function Remove-ConnectorDeploymentArtifacts { param($StorageAccountName,$AllowRoleCleanup) }
 function Wait-FunctionRegistration { param($FunctionAppName,$FunctionName,$Attempts) }
 function Invoke-AzRestMethod {
@@ -116,9 +116,10 @@ function Assert-FixtureTemplateParameters {
   }
   $extension=@($t.resources|Where-Object type -eq 'Microsoft.Web/sites/extensions')
   if ($extension.Count) {
-    if ($extension[0].properties.packageUri -notmatch '/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/') {throw 'Runtime is not pinned to resolved commit'}
-    $plan=@($t.resources|Where-Object type -eq 'Microsoft.Web/serverfarms')[0]
-    if ($plan.name -cne "[variables('hostingPlanName')]") {throw 'New plan naming was not applied'}
+    if ($extension[0].properties.packageUri -cne "[parameters('packageUri')]") {throw 'Template was rewritten instead of parameterized'}
+    if ($TemplateParameterObject.packageUri -notmatch '/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/') {throw 'Runtime is not pinned to resolved commit'}
+    if ($TemplateParameterObject.hostingPlanName -notmatch '-demo01-Plan$') {throw 'New plan naming was not applied'}
+    if ($TemplateParameterObject.appInsightsName -notmatch '-demo01-AI$') {throw 'New Insights naming was not applied'}
   }
   return $t
 }

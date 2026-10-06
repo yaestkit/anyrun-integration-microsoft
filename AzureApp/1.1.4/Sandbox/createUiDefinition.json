@@ -143,28 +143,25 @@
             "name": "indicatorAction",
             "type": "Microsoft.Common.DropDown",
             "label": "Indicator action",
-            "defaultValue": "Audit",
-            "toolTip": "Action applied to IOCs that ANY.RUN finds and the connector imports as Defender indicators.",
+            "defaultValue": "Audit (alert on match)",
+            "toolTip": "What Defender does with IOCs that ANY.RUN finds. Audit and Block create Defender indicators that raise alerts on match. Do not import keeps IOCs only in the alert comments and the ANY.RUN report.",
             "constraints": {
               "required": true,
               "allowedValues": [
                 {
-                  "label": "Audit",
+                  "label": "Audit (alert on match)",
                   "value": "Audit"
                 },
                 {
                   "label": "Block",
                   "value": "Block"
+                },
+                {
+                  "label": "Do not import IOCs",
+                  "value": "Disabled"
                 }
               ]
             }
-          },
-          {
-            "name": "generateAlert",
-            "type": "Microsoft.Common.CheckBox",
-            "label": "Generate a Defender alert when an imported indicator matches",
-            "defaultValue": false,
-            "toolTip": "Disabled by default to avoid an alert storm from Audit-mode indicators."
           }
         ]
       },
@@ -203,29 +200,20 @@
             "name": "privacyType",
             "type": "Microsoft.Common.DropDown",
             "label": "Analysis visibility",
-            "defaultValue": "Private (owner)",
+            "defaultValue": "By link (bylink)",
             "toolTip": "Private tasks require an ANY.RUN plan that supports them.",
             "constraints": {
               "required": true,
               "allowedValues": [
                 {
-                  "label": "Private (owner)",
-                  "value": "owner"
-                },
-                {
                   "label": "By link (bylink)",
                   "value": "bylink"
+                },
+                {
+                  "label": "Private (owner)",
+                  "value": "owner"
                 }
               ]
-            }
-          },
-          {
-            "name": "bylinkWarning",
-            "type": "Microsoft.Common.InfoBox",
-            "visible": "[equals(steps('anyrun').privacyType, 'bylink')]",
-            "options": {
-              "style": "Warning",
-              "text": "A by-link analysis is accessible to anyone who obtains its link. Choose this only if your ANY.RUN plan does not support private tasks and your organization accepts this."
             }
           }
         ]
@@ -238,7 +226,7 @@
             "name": "evidenceContainer",
             "type": "Microsoft.Common.TextBox",
             "label": "Evidence container name",
-            "defaultValue": "anyrun-evidence",
+            "defaultValue": "anyrun-quarantine",
             "toolTip": "Private blob container in the dedicated Storage Account where Live Response uploads evidence files.",
             "constraints": {
               "required": true,
@@ -299,7 +287,6 @@
       "azureClientId": "[steps('defender').clientId]",
       "azureClientSecret": "[steps('defender').clientSecret]",
       "defenderIndicatorAction": "[steps('defender').indicatorAction]",
-      "defenderIndicatorGenerateAlert": "[steps('defender').generateAlert]",
       "anyrunApiKey": "[steps('anyrun').apiKey]",
       "analysisPrivacyType": "[steps('anyrun').privacyType]",
       "evidenceContainerName": "[steps('storage').evidenceContainer]",

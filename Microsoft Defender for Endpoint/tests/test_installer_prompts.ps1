@@ -6,7 +6,7 @@ $installer = Join-Path $Root 'Scripts/Deploy-ANYRUNMDEConnector.ps1'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors.Message -join "`n") }
-$wanted = @('Read-Text','Read-Choice','Select-Connector','Confirm-Action','Read-RequiredSecret','Get-AzureAppNameHash','Write-Step')
+$wanted = @('Read-Text','Read-Choice','Select-Connector','Select-IndicatorAction','Confirm-Action','Read-RequiredSecret','Get-AzureAppNameHash','Write-Step')
 foreach ($node in $ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]}, $true)) {
   if ($node.Name -in $wanted) { Invoke-Expression $node.Extent.Text }
 }
@@ -81,6 +81,34 @@ Set-Answers @('', 'fixture-secret-value')
 $result = @(Read-RequiredSecret -Prompt 'Client secret' -HelpText 'Enter the secret VALUE, not the ID.' 6>&1)
 Assert-True ($result[-1] -is [Security.SecureString] -and $result[-1].Length -eq 20) 'Secret prompts must retry blank input and return a SecureString.'
 Assert-True (-not ($result | Out-String).Contains('fixture-secret-value')) 'Secret values must not appear in output.'
+
+# Indicator action: three choices for Sandbox, first one by default.
+$NonInteractive = $false
+foreach ($case in @(
+  @{Answers=@(''); Expected='Audit'},
+  @{Answers=@('2'); Expected='Block'},
+  @{Answers=@('3'); Expected='Disabled'},
+  @{Answers=@('disabled'); Expected='Disabled'},
+  @{Answers=@('4','Allowed','1'); Expected='Audit'}
+)) {
+  Set-Answers $case.Answers
+  $captured = @(Select-IndicatorAction -ConnectorType Sandbox -Requested Audit 6>&1)
+  Assert-True ($captured[-1] -ceq $case.Expected -and $script:answers.Count -eq 0) "Indicator choice returned '$($captured[-1])' instead of $($case.Expected)."
+  $log = $captured | Out-String
+  Assert-True ($log.Contains('Audit -') -and $log.Contains('Block -') -and $log.Contains('Do not import IOCs') -and $log.Contains('(default)')) 'Indicator menu must explain all three options and the default.'
+}
+Set-Answers @('')
+$captured = @(Select-IndicatorAction -ConnectorType Sandbox -Requested Audit -ExistingValue 'Disabled' 6>&1)
+Assert-True ($captured[-1] -eq 'Disabled' -and ($captured | Out-String).Contains('[3] Do not import IOCs - keep them only in alert comments (default)')) 'An update must offer the installed value as the default.'
+Set-Answers @()
+Assert-True ((Select-IndicatorAction -ConnectorType Sandbox -Requested Block -WasPassed $true -ExistingValue 'Disabled') -eq 'Block') 'An explicit parameter must not prompt or be overridden.'
+Assert-True ((Select-IndicatorAction -ConnectorType Feeds -Requested Audit) -eq 'Audit') 'Feeds must not show the Sandbox-only menu.'
+Assert-True ((Select-IndicatorAction -ConnectorType Feeds -Requested Audit -ExistingValue 'Block') -eq 'Block') 'Feeds update keeps the installed action.'
+$NonInteractive = $true
+Assert-True ((Select-IndicatorAction -ConnectorType Sandbox -Requested Audit) -eq 'Audit') 'Non-interactive mode must use the default without prompting.'
+Assert-True ((Select-IndicatorAction -ConnectorType Sandbox -Requested Audit -ExistingValue 'Disabled') -eq 'Disabled') 'Non-interactive update keeps the installed action.'
+Assert-True ((Select-IndicatorAction -ConnectorType Sandbox -Requested Audit -ExistingValue 'Allowed') -eq 'Audit') 'An invalid installed value must not be adopted.'
+$NonInteractive = $false
 
 function Start-Sleep { param([int]$Seconds) $script:waits++ }
 function New-AzResourceGroupDeployment {

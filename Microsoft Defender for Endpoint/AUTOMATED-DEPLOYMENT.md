@@ -11,8 +11,8 @@ The Feeds standalone deployment files are included at:
 
 The installer resolves these paths at the reviewed repository commit and checks
 the template/package hashes. Each standalone Function ZIP is identical to its
-Azure App 1.1.3 `artifacts/` ZIP, including the ZIP nested in the deployable
-`anyrun-*-mde-1.1.3.zip` bundle. Both deployment methods therefore use the same
+Azure App 1.1.4 `artifacts/` ZIP, including the ZIP nested in the deployable
+`anyrun-*-mde-1.1.4.zip` bundle. Both deployment methods therefore use the same
 Sandbox/Feeds runtime. Publish the installer, standalone templates/packages and
 Azure App bundles together before deploying from the repository.
 
@@ -115,24 +115,36 @@ traces
 ./Deploy-ANYRUNMDEConnector.ps1 `
   -Connector Sandbox `
   -DefenderIndicatorAction Audit `
-  -DefenderIndicatorGenerateAlert $false `
-  -SandboxAnalysisPrivacyType owner
+  -SandboxAnalysisPrivacyType bylink
 ```
 
-`DefenderIndicatorGenerateAlert` defaults to `$false` to prevent an alert storm
-from Audit-mode indicators. `owner` requires an ANY.RUN plan with private-task
-support; choose `bylink` explicitly when that mode is unavailable. The installer
+`DefenderIndicatorAction` accepts `Audit` (default), `Block` or `Disabled`.
+When it is not supplied, the interactive Sandbox installer asks for it with
+`Audit` preselected; on an update the installed value is preselected and is also
+kept by non-interactive runs.
+`Audit` and `Block` import Sandbox IOCs as Defender indicators that generate
+alerts on match; Microsoft requires `GenerateAlert` for `Audit`. Use `Disabled`
+to avoid indicator alerts entirely: no indicators are imported, and the verdict,
+report link and IOC list remain in the alert comments. `SandboxAnalysisPrivacyType` defaults to `bylink`;
+choose `owner` for private tasks if your ANY.RUN plan supports them. The installer
 adds the one-day orphan-evidence and seven-day job-status lifecycle rules only
 when it creates the dedicated Sandbox Storage Account. It does not replace the
 lifecycle policy of an existing account.
 
 The checked-in Function templates use the reviewed test repository and branch
-`yaestkit/anyrun-integration-microsoft@asyncv2` for the
-**Deploy to Azure** path and are not tied to a commit. For installer runs, the
-requested repository ref is first resolved through GitHub to an immutable
-40-character commit. Only the temporary verified deployment copy has its
-`packageUri` rewritten to that commit. This avoids a template/package time-of-
-check/time-of-use mismatch without permanently pinning checked-in templates.
+`yaestkit/anyrun-integration-microsoft@asyncv2` as the default of their
+`packageUri` parameter for the **Deploy to Azure** path. For installer runs, the
+branch is first resolved through GitHub to an immutable 40-character commit.
+The installer deploys the verified templates unchanged and passes the package
+URI for that commit as the `packageUri` parameter, so ARM downloads exactly the
+ZIP whose SHA-256 was checked. The `hostingPlanName` and `appInsightsName`
+parameters carry the Azure App resource names in the same way.
+
+The Function App managed identity receives **Storage Blob Data Contributor** on
+the connector Storage Account, as Flex Consumption requires for its deployment
+container. Earlier template versions granted Storage Blob Data Owner; on
+upgrade the installer removes that grant after the Contributor assignment has
+been deployed.
 
 ## Prerequisites
 
@@ -267,8 +279,8 @@ runtime storage access remain a future hardening item.
   -DefenderIndicatorAction Audit
 ```
 
-`DefenderIndicatorAction` accepts only `Audit` or `Block`; `Audit` is the safe
-default for both Sandbox and TI Feeds. `Machine.ReadWrite.All` is required by
+For TI Feeds `DefenderIndicatorAction` accepts only `Audit` or `Block`
+(`Disabled` is Sandbox-only); `Audit` is the default. `Machine.ReadWrite.All` is required by
 the application-token calls that list/read MachineAction objects and obtain the
 Live Response result download link; `Machine.LiveResponse` alone only permits
 starting the action. The confidence setting is named
@@ -292,16 +304,17 @@ overlapping delete/import cycles.
 
 ## Artifact verification and development forks
 
-Defaults in this test bundle are:
+The installer is pinned to these constants at the top of the script:
 
 ```text
 Repository:    yaestkit/anyrun-integration-microsoft
 RepositoryRef: refs/heads/asyncv2
 ```
 
-The branch is resolved to a commit before downloading. Default SHA-256 values for
-all four templates and both ZIP packages are embedded in the script. A mismatch
-stops before deployment.
+The branch is resolved to a commit before downloading. SHA-256 values for all
+four templates and both ZIP packages are embedded in `$script:Artifacts`. A
+mismatch stops before any Entra ID or deployment change. There is no switch to
+skip verification.
 
 After changing any reviewed template or package, rebuild packages and update all
 corresponding hashes in the installer in the same commit:
@@ -312,28 +325,16 @@ Get-FileHash './ANYRUN-Sandbox-MDE/Function App/ANYRUN-Sandbox-MDE-FA.zip' -Algo
 Get-FileHash './ANYRUN-TI-Feeds-MDE/Function App/ANYRUN-Feeds-MDE-FA.zip' -Algorithm SHA256
 ```
 
-For a reviewed development fork:
+To test a development fork, edit `$Repository`, `$RepositoryRef` and the hashes
+in a local copy of the script.
 
-```powershell
-./Deploy-ANYRUNMDEConnector.ps1 `
-  -Connector Sandbox `
-  -Repository 'owner/repository' `
-  -RepositoryRef 'refs/heads/feature-branch' `
-  -AllowUnverifiedArtifacts
-```
-
-`-AllowUnverifiedArtifacts` is an explicit development escape hatch: it permits
-an alternative repository or hash mismatch and prints prominent warnings. Do
-not use it for production. Local template parameters are intended for offline
-review and test; the operator is responsible for the local file's provenance.
-
-Before merging into the official repository, change the default repository,
-ref, checked-in deployment links, and Function `packageUri` values back to the
+Before merging into the official repository, change the repository, ref,
+checked-in deployment links, and the `packageUri` parameter defaults back to the
 official release branch in the same commit, then recalculate template hashes.
 
 ## Re-deployment and migration
 
-New installations use the naming convention from Azure App 1.1.3. The default
+New installations use the naming convention from Azure App 1.1.4. The default
 resource group is `ANYRUN-MDE-RG`; an existing `rg-anyrun-mde` is still offered
 when upgrading the original installer. Azure App itself uses the resource group
 selected in the Azure deployment UI and does not assign its name.
@@ -353,8 +354,8 @@ instance, use the same resource group and instance name.
 | Log Analytics workspace | `ANYRUN-Feeds-MDE-demo01-LAW` |
 | Storage Account | `anyrunfeeds<hash>demo01` |
 
-Sandbox uses `ANYRUN-Sandbox-MDE` and the storage prefix `anyrunsb`. The installer
-shares `ANYRUN-MDE-demo01-LAW` when deploying both connectors. The hash is exactly
+Sandbox uses `ANYRUN-Sandbox-MDE` and the storage prefix `anyrunsb`, including its
+own `ANYRUN-Sandbox-MDE-demo01-LAW` workspace. The hash is exactly
 `take(uniqueString(resourceGroup().id, instanceName), 6)`, evaluated by an
 incremental ARM deployment with no resources. Storage names remain lowercase,
 contain no hyphens and are limited to 24 characters. New Entra registration names
@@ -367,9 +368,9 @@ without the new `-FA` suffix. Other existing names are matched without regard to
 case, including old hosting-plan and Insights names. These changes do not rename
 existing Azure resources.
 
-When updating through Azure App 1.1.3, enter the same instance and fill in
-**Existing Function App name (updates only)** if the original Function name did
-not end in `-FA`; otherwise a new Function App would be created. An empty
+Azure App 1.1.4 has no field for an existing Function App name. Update instances
+whose Function App name does not end in `-FA` (Azure App 1.1.2 test builds) with
+this installer, which finds that name automatically. An empty
 instance retains version 1.1.1 resource names. Use a new instance value only when
 intending to create another connector.
 

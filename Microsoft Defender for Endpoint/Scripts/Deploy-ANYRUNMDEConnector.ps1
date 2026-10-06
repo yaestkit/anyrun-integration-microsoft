@@ -62,8 +62,8 @@ param(
   [string]$SandboxLogicAppName,
   [string]$SandboxStorageAccountName,
   [string]$SandboxBlobContainerName = "anyrun-quarantine",
-  [ValidateSet("owner", "bylink")]
-  [string]$SandboxAnalysisPrivacyType = "owner",
+  [ValidateSet("bylink", "owner")]
+  [string]$SandboxAnalysisPrivacyType = "bylink",
 
   [string]$FeedsAppDisplayName = "ANYRUN-Feeds-MDE-Connector",
   [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
@@ -80,9 +80,8 @@ param(
   [int]$FeedsFetchDepthDays = 30,
   [ValidateRange(1, 100)]
   [int]$FeedsMinimumConfidence = 50,
-  [ValidateSet("Audit", "Block")]
+  [ValidateSet("Audit", "Block", "Disabled")]
   [string]$DefenderIndicatorAction = "Audit",
-  [bool]$DefenderIndicatorGenerateAlert = $false,
 
   [ValidateRange(1, 24)]
   [int]$SecretLifetimeMonths = 6,
@@ -94,41 +93,37 @@ param(
   [switch]$ConfirmDedicatedAppRegistration,
   [switch]$ApproveDefenderPermissions,
   [switch]$DeferConsent,
-  [switch]$RotateClientSecret,
-  [switch]$AllowUnverifiedArtifacts,
-
-  [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
-  [string]$Repository = "yaestkit/anyrun-integration-microsoft",
-  [ValidatePattern('^[A-Za-z0-9._/-]+$')]
-  [string]$RepositoryRef = "refs/heads/asyncv2",
-  [string]$SandboxFunctionTemplateUri,
-  [string]$SandboxLogicTemplateUri,
-  [string]$FeedsFunctionTemplateUri,
-  [string]$FeedsLogicTemplateUri,
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxPackageSha256 = "821594cfddaf9ceb32e7330ca9da8f4cfac4950b55b928206f37d7a93ee19bf4",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsPackageSha256 = "38256d0fbfebc09037ebb9ddf6eea40f272edd7c350747496a5ba5838244f843",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxFunctionTemplateSha256 = "7ec9b88be91c791a9c028252eed1eb85bfa9e9f864d17265f329f58479f721c7",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$SandboxLogicTemplateSha256 = "d71aff66069bc7a216449aa55ed09b5808b3540cbaf0ca2434cd7ef52516da5d",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsFunctionTemplateSha256 = "e93cd0a4c97bd66481919af35b9fbc6f15859a300c2d743cd36a03bf812c53f4",
-  [ValidatePattern('^[0-9a-fA-F]{64}$')]
-  [string]$FeedsLogicTemplateSha256 = "e219f7f13a09646b940fefb659cedf5cb35cd196ede67d6aa48c88f6b1f397ec",
-  [string]$SandboxFunctionTemplateFile,
-  [string]$SandboxLogicTemplateFile,
-  [string]$FeedsFunctionTemplateFile,
-  [string]$FeedsLogicTemplateFile
+  [switch]$RotateClientSecret
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version 3.0
 
+# Reviewed release artifacts. The branch is resolved to a commit at run time and
+# every downloaded file must match these SHA-256 values. Update them together
+# with the checked-in templates and Function packages.
+$Repository = "yaestkit/anyrun-integration-microsoft"
+$RepositoryRef = "refs/heads/asyncv2"
+$script:Artifacts = @{
+  Sandbox = @{
+    Path = "ANYRUN-Sandbox-MDE"; FunctionDirectory = "ANYRUN-Sandbox-MDE-FA"
+    FunctionTemplate = "ANYRUN-Sandbox-MDE-FA.json"; FunctionTemplateSha256 = "f19bf0d6d6be2fd46fdf95b42c38dd7ff689b2cb57ff240fef363f738c423dbf"
+    Package = "ANYRUN-Sandbox-MDE-FA.zip"; PackageSha256 = "96bb5ff6a54d5c9cfb245445aa21ace760264c93a4424e75ce892ea7c20aa0dd"
+    LogicTemplate = "ANYRUN-Sandbox-MDE-LA.json"; LogicTemplateSha256 = "1c1d080bb98cc8afa84cfb9e86e9f141175254e91fa34d6abd66c0e6eb186113"
+  }
+  Feeds = @{
+    Path = "ANYRUN-TI-Feeds-MDE"; FunctionDirectory = "ANYRUN-Feeds-MDE-FA"
+    FunctionTemplate = "ANYRUN-Feeds-MDE-FA.json"; FunctionTemplateSha256 = "355c0109232ba3fc537a35a68459594b6dabcf8b2d9d7190b9888f1212c9ef83"
+    Package = "ANYRUN-Feeds-MDE-FA.zip"; PackageSha256 = "38256d0fbfebc09037ebb9ddf6eea40f272edd7c350747496a5ba5838244f843"
+    LogicTemplate = "ANYRUN-Feeds-MDE-LA.json"; LogicTemplateSha256 = "e219f7f13a09646b940fefb659cedf5cb35cd196ede67d6aa48c88f6b1f397ec"
+  }
+}
+
 $script:WindowsDefenderAtpAppId = "fc780465-2017-40d4-a0c5-307022471b92"
-$script:StorageBlobDataOwnerRoleId = "b7e6dc6d-f1e8-4753-8033-0f276bb0955b"
+$script:StorageBlobDataContributorRoleId = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+# Granted by earlier template versions; removed during upgrade.
+$script:LegacyStorageBlobDataOwnerRoleId = "b7e6dc6d-f1e8-4753-8033-0f276bb0955b"
 $script:InstallerTagPrefix = "anyrun-mde-installer:v1"
 $script:GraphSessionOwned = $false
 $script:TemporaryFiles = [System.Collections.Generic.List[string]]::new()
@@ -142,6 +137,7 @@ $feedsDisplayNameWasPassed = $PSBoundParameters.ContainsKey("FeedsAppDisplayName
 $regionWasPassed = $PSBoundParameters.ContainsKey("Region")
 $sandboxAppIdWasPassed = $PSBoundParameters.ContainsKey("SandboxAppId")
 $feedsAppIdWasPassed = $PSBoundParameters.ContainsKey("FeedsAppId")
+$indicatorActionWasPassed = $PSBoundParameters.ContainsKey("DefenderIndicatorAction")
 
 $sandboxRoles = @(
   "Alert.ReadWrite.All",
@@ -263,6 +259,33 @@ function Select-Connector {
   return "Sandbox"
 }
 
+function Select-IndicatorAction {
+  param(
+    [Parameter(Mandatory = $true)][ValidateSet("Sandbox", "Feeds")][string]$ConnectorType,
+    [Parameter(Mandatory = $true)][string]$Requested,
+    [bool]$WasPassed = $false,
+    [AllowEmptyString()][string]$ExistingValue = ""
+  )
+
+  # An explicit parameter wins. Otherwise keep the value of an existing
+  # installation, so an update does not silently reset the operator's choice.
+  if ($WasPassed) { return $Requested }
+  $allowed = if ($ConnectorType -eq "Sandbox") { @("Audit", "Block", "Disabled") } else { @("Audit", "Block") }
+  $current = @($allowed | Where-Object { $_ -eq $ExistingValue }) | Select-Object -First 1
+  if (-not $current) { $current = $Requested }
+  if ($NonInteractive -or $ConnectorType -ne "Sandbox") { return $current }
+
+  $selected = Read-Choice -Prompt "Indicator action for IOCs found by ANY.RUN" `
+    -Default ([Array]::IndexOf($allowed, $current) + 1) -Values $allowed `
+    -HelpText "Audit and Block create Microsoft Defender indicators that raise an alert on match. Option 3 keeps IOCs only in the alert comments and the ANY.RUN report." `
+    -Options @(
+      "Audit - import IOCs; Defender raises an alert on match",
+      "Block - import IOCs and block them",
+      "Do not import IOCs - keep them only in alert comments"
+    )
+  return $allowed[$selected - 1]
+}
+
 function Confirm-Action {
   param([Parameter(Mandatory = $true)][string]$Prompt, [bool]$Default = $true)
   if ($NonInteractive) { return $Default }
@@ -290,9 +313,6 @@ function Assert-GuidValue {
 function Resolve-RepositoryCommit {
   param([Parameter(Mandatory = $true)][string]$RepositoryName, [Parameter(Mandatory = $true)][string]$Ref)
 
-  if ($RepositoryName -ne "yaestkit/anyrun-integration-microsoft" -and -not $AllowUnverifiedArtifacts) {
-    throw "Repository '$RepositoryName' is not the reviewed repository for this test bundle. Use -AllowUnverifiedArtifacts only for an explicitly reviewed alternative repository."
-  }
   if ($Ref -match '^[0-9a-fA-F]{40}$') { return $Ref.ToLowerInvariant() }
   if ($Ref.Contains('..') -or $Ref.StartsWith('/') -or $Ref.EndsWith('/')) {
     throw "RepositoryRef '$Ref' is not a safe Git reference."
@@ -316,34 +336,20 @@ function Get-VerifiedRemoteFile {
   param(
     [Parameter(Mandatory = $true)][string]$Uri,
     [Parameter(Mandatory = $true)][string]$Destination,
-    [string]$ExpectedSha256,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSha256,
     [Parameter(Mandatory = $true)][string]$Label
   )
 
   $parsedUri = [Uri]$Uri
   if ($parsedUri.Scheme -ne 'https' -or $parsedUri.Host -ne 'raw.githubusercontent.com') {
-    if (-not $AllowUnverifiedArtifacts) {
-      throw "$Label URI must use https://raw.githubusercontent.com. Received '$Uri'."
-    }
-    Write-Host "  WARNING: $Label uses a non-allowlisted URI because -AllowUnverifiedArtifacts was supplied: $Uri" -ForegroundColor Yellow
+    throw "$Label URI must use https://raw.githubusercontent.com. Received '$Uri'."
   }
-
   Invoke-WebRequest -Uri $Uri -OutFile $Destination
   $actualHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-    if (-not $AllowUnverifiedArtifacts) {
-      throw "$Label has no expected SHA-256. Supply the hash or explicitly use -AllowUnverifiedArtifacts for development only."
-    }
-    Write-Host "  WARNING: $Label is unverified; observed SHA-256 is $actualHash." -ForegroundColor Yellow
-  } elseif ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
-    if (-not $AllowUnverifiedArtifacts) {
-      throw "$Label SHA-256 mismatch. Expected $ExpectedSha256 but downloaded $actualHash."
-    }
-    Write-Host "  WARNING: $Label SHA-256 mismatch was overridden; expected $ExpectedSha256, observed $actualHash." -ForegroundColor Yellow
-  } else {
-    Write-Host "  Verified $Label SHA-256 ($actualHash)." -ForegroundColor Green
+  if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
+    throw "$Label SHA-256 mismatch. Expected $ExpectedSha256 but downloaded $actualHash."
   }
-  return $actualHash
+  Write-Host "  Verified $Label SHA-256 ($actualHash)." -ForegroundColor Green
 }
 
 function Show-ResourceGroupWriteAccess {
@@ -496,6 +502,29 @@ function ConvertFrom-AzRestContent {
   return $Response.Content | ConvertFrom-Json
 }
 
+function Invoke-AzRestJson {
+  param(
+    [Parameter(Mandatory = $true)][string]$Method,
+    [Parameter(Mandatory = $true)][string]$Path,
+    [string]$Payload,
+    [int[]]$AllowedStatusCodes = @()
+  )
+
+  # Invoke-AzRestMethod does not throw on HTTP errors. Report the real status
+  # instead of a later StrictMode "property cannot be found" error.
+  $arguments = @{ Method = $Method; Path = $Path }
+  if ($PSBoundParameters.ContainsKey("Payload")) { $arguments.Payload = $Payload }
+  $response = Invoke-AzRestMethod @arguments
+  $status = [int]$response.StatusCode
+  if ($AllowedStatusCodes -contains $status) { return $null }
+  if ($status -lt 200 -or $status -ge 300) {
+    $detail = "$($response.Content)"
+    if ($detail.Length -gt 500) { $detail = $detail.Substring(0, 500) }
+    throw "Azure request $Method $($Path.Split('?')[0]) returned HTTP $status. $detail"
+  }
+  return ConvertFrom-AzRestContent -Response $response
+}
+
 function Get-ObjectPropertyValue {
   param([Parameter(Mandatory = $true)]$InputObject, [Parameter(Mandatory = $true)][string]$Name)
   $property = $InputObject.PSObject.Properties[$Name]
@@ -526,7 +555,7 @@ function Test-EffectiveRoleAssignmentPermission {
   param([Parameter(Mandatory = $true)][string]$Scope)
 
   $path = "$Scope/providers/Microsoft.Authorization/permissions?api-version=2022-04-01"
-  $response = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $path)
+  $response = Invoke-AzRestJson -Method GET -Path $path
   $target = "Microsoft.Authorization/roleAssignments/write"
   foreach ($permission in @($response.value)) {
     $allowed = @($permission.actions | Where-Object { $target -like $_ }).Count -gt 0
@@ -559,8 +588,8 @@ function Assert-FunctionAppNameAvailable {
 
   $body = @{ name = $Name; type = "Microsoft.Web/sites"; isFqdn = $false } | ConvertTo-Json -Compress
   $path = "/subscriptions/$SubscriptionId/providers/Microsoft.Web/checknameavailability?api-version=2024-04-01"
-  $result = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method POST -Path $path -Payload $body)
-  if (-not $result.nameAvailable) {
+  $result = Invoke-AzRestJson -Method POST -Path $path -Payload $body
+  if (-not (Get-ObjectPropertyValue -InputObject $result -Name "nameAvailable")) {
     throw "Function App name '$Name' is unavailable: $($result.message)"
   }
 }
@@ -591,7 +620,7 @@ function Get-ExistingFunctionConfiguration {
   $site = Get-AzResource -ResourceGroupName $ResourceGroup -ResourceType "Microsoft.Web/sites" -Name $FunctionAppName -ErrorAction SilentlyContinue
   if (-not $site) { return $null }
   $path = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$FunctionAppName/config/appsettings/list?api-version=2024-04-01"
-  return ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method POST -Path $path -Payload "{}")
+  return Invoke-AzRestJson -Method POST -Path $path -Payload "{}"
 }
 
 function Connect-AzureSmart {
@@ -1403,7 +1432,8 @@ function Remove-ConnectorDeploymentArtifacts {
   $assignments = @(Get-AzRoleAssignment -Scope $storage.Id -ErrorAction SilentlyContinue |
     Where-Object {
       $_.Scope -eq $storage.Id -and
-      $_.RoleDefinitionId -like "*$($script:StorageBlobDataOwnerRoleId)"
+      ($_.RoleDefinitionId -like "*$($script:StorageBlobDataContributorRoleId)" -or
+       $_.RoleDefinitionId -like "*$($script:LegacyStorageBlobDataOwnerRoleId)")
     })
   if (@($assignments | Where-Object ObjectType -eq "Unknown").Count -gt 0 -and -not $ForceGraphDeviceCode) {
     Connect-GraphSmart -RequestedTenantId $TenantId
@@ -1422,7 +1452,7 @@ function Remove-ConnectorDeploymentArtifacts {
       }
     }
     if (-not $confirmedDeleted) { continue }
-    Write-Host "  Removing stale Storage Blob Data Owner assignment '$($assignment.RoleAssignmentName)'..." -ForegroundColor Yellow
+    Write-Host "  Removing stale Storage Blob Data role assignment '$($assignment.RoleAssignmentName)' of a deleted Function App identity..." -ForegroundColor Yellow
     Remove-AzRoleAssignment -InputObject $assignment | Out-Null
   }
 }
@@ -1431,14 +1461,15 @@ function Remove-LegacyStorageRoleAssignment {
   param(
     [Parameter(Mandatory = $true)][string]$StorageAccountName,
     [Parameter(Mandatory = $true)][string]$FunctionAppName,
-    [Parameter(Mandatory = $true)][ValidateSet('Sandbox', 'Feeds')][string]$ConnectorType
+    [Parameter(Mandatory = $true)][ValidateSet('Sandbox', 'Feeds')][string]$ConnectorType,
+    [switch]$SupersededOwner
   )
 
   $storage = Get-AzStorageAccount -ResourceGroupName $ResourceGroup -Name $StorageAccountName -ErrorAction SilentlyContinue
   if (-not $storage) { return }
   $sitePath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$($FunctionAppName)?api-version=2024-11-01"
   try {
-    $site = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $sitePath)
+    $site = Invoke-AzRestJson -Method GET -Path $sitePath -AllowedStatusCodes @(404)
   } catch { return }
   if (-not $site) { return }
   $identity = Get-ObjectPropertyValue -InputObject $site -Name "identity"
@@ -1446,198 +1477,150 @@ function Remove-LegacyStorageRoleAssignment {
   $principalId = "$(Get-ObjectPropertyValue -InputObject $identity -Name 'principalId')"
   if ($principalId -notmatch '^[0-9a-fA-F-]{36}$') { return }
 
-  $legacyNames = [System.Collections.Generic.List[string]]::new()
-  $legacyNames.Add((Get-ArmGuid -Values @($storage.Id, $script:StorageBlobDataOwnerRoleId)))
-  if ($ConnectorType -eq 'Feeds') {
-    $legacyNames.Add((Get-ArmGuid -Values @($storage.Id, $script:StorageBlobDataOwnerRoleId, 'feeds')))
-  }
-  $legacyAssignments = @(Get-AzRoleAssignment -Scope $storage.Id -ErrorAction SilentlyContinue | Where-Object {
+  $ownerAssignments = @(Get-AzRoleAssignment -Scope $storage.Id -ErrorAction SilentlyContinue | Where-Object {
     $_.Scope -eq $storage.Id -and
     $_.ObjectId.ToString() -eq $principalId -and
-    $legacyNames -contains $_.RoleAssignmentName
+    $_.RoleDefinitionId -like "*$($script:LegacyStorageBlobDataOwnerRoleId)"
   })
-  foreach ($assignment in $legacyAssignments) {
+  if ($SupersededOwner) {
+    # After deployment the Function App identity holds Storage Blob Data
+    # Contributor, which is what Flex Consumption deployment storage needs.
+    foreach ($assignment in $ownerAssignments) {
+      Write-Host "  Removing superseded Storage Blob Data Owner assignment '$($assignment.RoleAssignmentName)'; the Function App now uses Storage Blob Data Contributor." -ForegroundColor Yellow
+      Remove-AzRoleAssignment -InputObject $assignment | Out-Null
+    }
+    return
+  }
+
+  # The oldest templates used a role-assignment name without the principal ID.
+  # Remove it before deployment so ARM can create the current assignment.
+  $legacyNames = [System.Collections.Generic.List[string]]::new()
+  $legacyNames.Add((Get-ArmGuid -Values @($storage.Id, $script:LegacyStorageBlobDataOwnerRoleId)))
+  if ($ConnectorType -eq 'Feeds') {
+    $legacyNames.Add((Get-ArmGuid -Values @($storage.Id, $script:LegacyStorageBlobDataOwnerRoleId, 'feeds')))
+  }
+  foreach ($assignment in @($ownerAssignments | Where-Object { $legacyNames -contains $_.RoleAssignmentName })) {
     Write-Host "  Removing legacy Storage Blob Data Owner assignment '$($assignment.RoleAssignmentName)' before idempotent migration..." -ForegroundColor Yellow
     Remove-AzRoleAssignment -InputObject $assignment | Out-Null
   }
 }
 
-function Set-FunctionSupportingResourceNames {
-  param(
-    [Parameter(Mandatory = $true)][object]$Template,
-    [Parameter(Mandatory = $true)][string]$BaseName,
-    [Parameter(Mandatory = $true)][string]$FunctionAppName,
-    [object[]]$Resources = @()
-  )
+function Get-ConnectorArtifacts {
+  param([Parameter(Mandatory = $true)][ValidateSet("Sandbox", "Feeds")][string]$ConnectorType)
 
-  $planName = Select-ExistingResourceName -PreferredName "$BaseName-Plan" `
-    -ResourceType 'Microsoft.Web/serverfarms' -PreviousNames @($FunctionAppName) -Resources $Resources
-  $insightsName = Select-ExistingResourceName -PreferredName "$BaseName-AI" `
-    -ResourceType 'Microsoft.Insights/components' -PreviousNames @($FunctionAppName) -Resources $Resources
-  $plan = @($Template.resources | Where-Object type -eq 'Microsoft.Web/serverfarms')
-  $insights = @($Template.resources | Where-Object type -eq 'Microsoft.Insights/components')
-  if ($plan.Count -ne 1 -or $insights.Count -ne 1) {
-    throw 'The reviewed Function template must contain one hosting plan and one Application Insights resource.'
+  # Templates are deployed exactly as reviewed; only parameters differ per
+  # installation. The package URI is pinned to the resolved commit, so ARM
+  # downloads the same ZIP whose SHA-256 is verified here.
+  $artifact = $script:Artifacts[$ConnectorType]
+  $root = "https://raw.githubusercontent.com/$Repository/$($script:ResolvedRepositoryRef)/Microsoft%20Defender%20for%20Endpoint/$($artifact.Path)"
+  $result = [ordered]@{ PackageUri = "$root/Function%20App/$($artifact.Package)" }
+  $downloads = @(
+    @{ Key = "FunctionTemplate"; Uri = "$root/Function%20App/$($artifact.FunctionTemplate)"; Sha256 = $artifact.FunctionTemplateSha256; Label = "$ConnectorType Function template" },
+    @{ Key = "Package"; Uri = $result.PackageUri; Sha256 = $artifact.PackageSha256; Label = "$ConnectorType Function package" },
+    @{ Key = "LogicTemplate"; Uri = "$root/Logic%20App/$($artifact.LogicTemplate)"; Sha256 = $artifact.LogicTemplateSha256; Label = "$ConnectorType Logic template" }
+  )
+  foreach ($download in $downloads) {
+    $extension = if ($download.Key -eq "Package") { "zip" } else { "json" }
+    $path = Join-Path ([IO.Path]::GetTempPath()) "anyrun-$($ConnectorType.ToLowerInvariant())-$($download.Key.ToLowerInvariant())-$([Guid]::NewGuid().ToString('N')).$extension"
+    $script:TemporaryFiles.Add($path)
+    Get-VerifiedRemoteFile -Uri $download.Uri -Destination $path -ExpectedSha256 $download.Sha256 -Label $download.Label
+    $result[$download.Key] = $path
   }
-  $Template.variables | Add-Member -NotePropertyName hostingPlanName -NotePropertyValue $planName -Force
-  $Template.variables | Add-Member -NotePropertyName appInsightsName -NotePropertyValue $insightsName -Force
-  $plan[0].name = "[variables('hostingPlanName')]"
-  $insights[0].name = "[variables('appInsightsName')]"
-  # Rewrite only resourceId calls for these two resource types. Function,
-  # storage, managed-identity and role-assignment references keep their targets.
-  $json = $Template | ConvertTo-Json -Depth 100
-  $json = [regex]::Replace($json,
-    "(?i)resourceId\('Microsoft.Web/serverfarms',\s*parameters\('functionAppName'\)\)",
-    "resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))")
-  $json = [regex]::Replace($json,
-    "(?i)resourceId\('Microsoft.Insights/components',\s*parameters\('functionAppName'\)\)",
-    "resourceId('Microsoft.Insights/components', variables('appInsightsName'))")
-  return ($json | ConvertFrom-Json)
-}
 
-function New-PreparedFunctionTemplate {
-  param(
-    [Parameter(Mandatory = $true)][string]$TemplateUri,
-    [Parameter(Mandatory = $true)][ValidateSet("Sandbox", "Feeds")][string]$ConnectorType,
-    [Parameter(Mandatory = $true)][string]$ExpectedTemplateHash
-  )
-
-  $temporaryPath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-$($ConnectorType.ToLowerInvariant())-$([Guid]::NewGuid().ToString('N')).json"
-  $script:TemporaryFiles.Add($temporaryPath)
-  Get-VerifiedRemoteFile -Uri $TemplateUri -Destination $temporaryPath -ExpectedSha256 $ExpectedTemplateHash `
-    -Label "$ConnectorType Function template" | Out-Null
-  $template = Get-Content -LiteralPath $temporaryPath -Raw | ConvertFrom-Json
-  $extension = @($template.resources | Where-Object type -eq "Microsoft.Web/sites/extensions") | Select-Object -First 1
-  if (-not $extension) { throw "Function template '$TemplateUri' does not contain a Microsoft.Web/sites/extensions resource." }
-
-  $connectorPath = if ($ConnectorType -eq "Sandbox") { "ANYRUN-Sandbox-MDE" } else { "ANYRUN-TI-Feeds-MDE" }
-  $packageName = if ($ConnectorType -eq "Sandbox") { "ANYRUN-Sandbox-MDE-FA.zip" } else { "ANYRUN-Feeds-MDE-FA.zip" }
-  $packageUri = "https://raw.githubusercontent.com/$Repository/$($script:ResolvedRepositoryRef)/Microsoft%20Defender%20for%20Endpoint/$connectorPath/Function%20App/$packageName"
-  $extension.properties.packageUri = $packageUri
-
-  $expectedPackageHash = if ($ConnectorType -eq "Sandbox") { $SandboxPackageSha256 } else { $FeedsPackageSha256 }
-  $packagePath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-package-$([Guid]::NewGuid().ToString('N')).zip"
+  $archive = $null
   try {
-    Write-Step "Checking the $ConnectorType Function package declared by the template..."
-    $actualPackageHash = Get-VerifiedRemoteFile -Uri $packageUri -Destination $packagePath `
-      -ExpectedSha256 $expectedPackageHash -Label "$ConnectorType Function package"
-
-    $archive = $null
-    try {
-      $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
-      $entryNames = @($archive.Entries | ForEach-Object FullName)
-      $functionDirectory = if ($ConnectorType -eq "Sandbox") { "ANYRUN-Sandbox-MDE-FA" } else { "ANYRUN-Feeds-MDE-FA" }
-      $requiredEntries = @("host.json", "requirements.txt", "$functionDirectory/function.json")
-      $missingEntries = @($requiredEntries | Where-Object { $entryNames -notcontains $_ })
-      if ($missingEntries.Count -gt 0) {
-        throw "$ConnectorType package is missing required ZIP entries: $($missingEntries -join ', ')."
-      }
-    } catch {
-      throw "$ConnectorType package at '$packageUri' is not a valid Function deployment ZIP: $($_.Exception.Message)"
-    } finally {
-      if ($archive) { $archive.Dispose() }
+    $archive = [IO.Compression.ZipFile]::OpenRead($result.Package)
+    $entryNames = @($archive.Entries | ForEach-Object FullName)
+    $requiredEntries = @("host.json", "requirements.txt", "$($artifact.FunctionDirectory)/function.json")
+    $missingEntries = @($requiredEntries | Where-Object { $entryNames -notcontains $_ })
+    if ($missingEntries.Count -gt 0) {
+      throw "missing required ZIP entries: $($missingEntries -join ', ')."
     }
-
+  } catch {
+    throw "$ConnectorType package at '$($result.PackageUri)' is not a valid Function deployment ZIP: $($_.Exception.Message)"
   } finally {
-    Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
+    if ($archive) { $archive.Dispose() }
   }
-
-  # Do not silently remove arbitrary resources from downloaded templates. The
-  # reviewed templates do not contain the historical WaitSection deployment
-  # script; if an older template is supplied, fail and require an explicit
-  # template upgrade instead of changing its behavior in memory.
-  $waitSections = @($template.resources | Where-Object {
-    $_.type -eq "Microsoft.Resources/deploymentScripts" -and $_.name -eq "WaitSection"
-  })
-  if ($waitSections.Count -gt 0) {
-    throw "$ConnectorType Function template still contains the obsolete WaitSection deployment script. Use a reviewed current template."
-  }
-  $roleAssignment = @($template.resources | Where-Object type -eq "Microsoft.Authorization/roleAssignments") | Select-Object -First 1
-  if ($roleAssignment) {
-    if (-not $roleAssignment.scope -or "$($roleAssignment.scope)" -notmatch 'Microsoft\.Storage/storageAccounts') {
-      throw "$ConnectorType Function template storage role assignment is not scoped to the connector storage account."
-    }
-    $roleAssignment.properties | Add-Member -NotePropertyName principalType -NotePropertyValue "ServicePrincipal" -Force
-
-    # A role assignment with scope=storageAccount is an ARM extension resource.
-    # Its dependency ID must include that scope; resourceId(roleAssignments, ...)
-    # would point at a different resource at resource-group scope.
-    $roleAssignmentNameExpression = "$($roleAssignment.name)".Trim()
-    if ($roleAssignmentNameExpression.StartsWith('[') -and $roleAssignmentNameExpression.EndsWith(']')) {
-      $roleAssignmentNameExpression = $roleAssignmentNameExpression.Substring(1, $roleAssignmentNameExpression.Length - 2)
-    }
-    $extension.dependsOn = @("[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName')), 'Microsoft.Authorization/roleAssignments', $roleAssignmentNameExpression)]")
-  } else {
-    # A template that has already received the scoped-RBAC fix keeps the role
-    # assignment inside a nested deployment. Preserve it and make onedeploy
-    # depend on that deployment instead of trying to transform it again.
-    $roleDeployment = @($template.resources | Where-Object {
-      $_.type -eq "Microsoft.Resources/deployments" -and
-      $_.properties.template -and
-      @($_.properties.template.resources | Where-Object type -eq "Microsoft.Authorization/roleAssignments").Count -gt 0
-    }) | Select-Object -First 1
-    if (-not $roleDeployment) { throw "$ConnectorType Function template does not contain its storage role assignment." }
-
-    $nestedRoleAssignment = @($roleDeployment.properties.template.resources | Where-Object type -eq "Microsoft.Authorization/roleAssignments") | Select-Object -First 1
-    if (-not $nestedRoleAssignment.scope -or "$($nestedRoleAssignment.scope)" -notmatch 'Microsoft\.Storage/storageAccounts') {
-      throw "$ConnectorType Function template storage role assignment is not scoped to the connector storage account."
-    }
-    $nestedRoleAssignment.properties | Add-Member -NotePropertyName principalType -NotePropertyValue "ServicePrincipal" -Force
-
-    $roleDeploymentNameExpression = "$($roleDeployment.name)".Trim()
-    if ($roleDeploymentNameExpression.StartsWith('[') -and $roleDeploymentNameExpression.EndsWith(']')) {
-      $roleDeploymentNameExpression = $roleDeploymentNameExpression.Substring(1, $roleDeploymentNameExpression.Length - 2)
-    } else {
-      $escapedRoleDeploymentName = $roleDeploymentNameExpression.Replace("'", "''")
-      $roleDeploymentNameExpression = "'$escapedRoleDeploymentName'"
-    }
-    $extension.dependsOn = @("[resourceId('Microsoft.Resources/deployments', $roleDeploymentNameExpression)]")
-  }
-  if (-not $useLegacyNames) {
-    $functionAppName = if ($ConnectorType -eq 'Sandbox') { $SandboxFunctionName } else { $FeedsFunctionName }
-    $template = Set-FunctionSupportingResourceNames -Template $template `
-      -BaseName "ANYRUN-$ConnectorType-MDE-$InstanceName" -FunctionAppName $functionAppName -Resources $existingResources
-  }
-  $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $temporaryPath -Encoding utf8NoBOM
-  Write-Host "  Pinned $ConnectorType packageUri to immutable commit '$($script:ResolvedRepositoryRef)'." -ForegroundColor DarkGray
-  return $temporaryPath
+  Write-Host "  Function packageUri is pinned to commit '$($script:ResolvedRepositoryRef)'." -ForegroundColor DarkGray
+  return [pscustomobject]$result
 }
 
-function New-RegionalLogicTemplate {
+function Get-FunctionTemplateParameters {
   param(
-    [Parameter(Mandatory = $true)][string]$TemplateUri,
-    [Parameter(Mandatory = $true)][ValidateSet("Sandbox", "Feeds")][string]$ConnectorType,
-    [Parameter(Mandatory = $true)][string]$ExpectedTemplateHash
+    [Parameter(Mandatory = $true)][hashtable]$Names,
+    [Parameter(Mandatory = $true)][string]$ClientId,
+    [Parameter(Mandatory = $true)][SecureString]$ClientSecret,
+    [Parameter(Mandatory = $true)][string]$StorageAccountName,
+    [Parameter(Mandatory = $true)][SecureString]$StorageKey,
+    [Parameter(Mandatory = $true)][SecureString]$StorageConnectionString,
+    [Parameter(Mandatory = $true)][SecureString]$ApiKey,
+    [bool]$ConfigureLifecyclePolicy = $false
   )
 
-  $temporaryPath = Join-Path ([IO.Path]::GetTempPath()) "anyrun-$($ConnectorType.ToLowerInvariant())-logic-$([Guid]::NewGuid().ToString('N')).json"
-  $script:TemporaryFiles.Add($temporaryPath)
-  Get-VerifiedRemoteFile -Uri $TemplateUri -Destination $temporaryPath -ExpectedSha256 $ExpectedTemplateHash `
-    -Label "$ConnectorType Logic template" | Out-Null
-  $template = Get-Content -LiteralPath $temporaryPath -Raw | ConvertFrom-Json
-  $workflow = @($template.resources | Where-Object type -eq "Microsoft.Logic/workflows") | Select-Object -First 1
-  if (-not $workflow) { throw "$ConnectorType Logic App template does not contain a Microsoft.Logic/workflows resource." }
-  $workflow.location = "[resourceGroup().location]"
-  $template | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $temporaryPath -Encoding utf8NoBOM
-  return $temporaryPath
+  $parameters = @{
+    functionAppName              = $Names.FunctionApp
+    hostingPlanName              = $Names.HostingPlan
+    appInsightsName              = $Names.AppInsights
+    packageUri                   = $Names.PackageUri
+    AzureTenantID                = $TenantId
+    AzureClientID                = $ClientId
+    AzureClientSecret            = $ClientSecret
+    AzureStorageAccountName      = $StorageAccountName
+    AzureStorageConnectionString = $StorageConnectionString
+    LogAnalyticsWorkspaceName    = $LogAnalyticsWorkspaceName
+    DefenderIndicatorAction      = $DefenderIndicatorAction
+  }
+  if ($Connector -eq "Sandbox") {
+    $parameters.AzureStorageAccountKey = $StorageKey
+    $parameters.AzureBlobContainerName = $SandboxBlobContainerName
+    $parameters.ANYRUN_API_KEY = $ApiKey
+    $parameters.ConfigureEvidenceLifecyclePolicy = $ConfigureLifecyclePolicy
+  } else {
+    $parameters.anyrunApiKey = $ApiKey
+  }
+  return $parameters
+}
+
+function Get-LogicTemplateParameters {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$Names,
+    [Parameter(Mandatory = $true)][string]$ClientId,
+    [Parameter(Mandatory = $true)][SecureString]$ClientSecret
+  )
+
+  if ($Connector -eq "Sandbox") {
+    return @{
+      logicAppName        = $Names.LogicApp
+      azureTenantId       = $TenantId
+      azureClientId       = $ClientId
+      azureClientSecret   = $ClientSecret
+      functionAppName     = $Names.FunctionApp
+      analysisPrivacyType = $SandboxAnalysisPrivacyType
+    }
+  }
+  return @{
+    logicAppName                 = $Names.LogicApp
+    intervalRecurrence           = $FeedsIntervalHours
+    feedFetchDepth               = $FeedsFetchDepthDays
+    minimum_confidence_threshold = $FeedsMinimumConfidence
+    functionAppName              = $Names.FunctionApp
+  }
 }
 
 function Test-ArmDeployment {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
-    [string]$TemplateUri,
-    [string]$TemplateFile,
+    [Parameter(Mandatory = $true)][string]$TemplateFile,
     [Parameter(Mandatory = $true)][hashtable]$TemplateParameters
   )
 
   $splat = @{
     ResourceGroupName       = $ResourceGroup
+    TemplateFile            = $TemplateFile
     TemplateParameterObject = $TemplateParameters
     ErrorAction             = "Stop"
     WarningVariable         = "armValidationWarnings"
   }
-  if ($TemplateFile) { $splat.TemplateFile = $TemplateFile }
-  else               { $splat.TemplateUri = $TemplateUri }
 
   Write-Step "Validating $Label against Azure Policy and ARM..."
   $armValidationWarnings = @()
@@ -1691,17 +1674,12 @@ function Get-DeploymentOperationDiagnostic {
 
 function Invoke-ArmDeployment {
   param(
-    [string]$Label,
-    [string]$TemplateUri,
-    [string]$TemplateFile,
-    [hashtable]$TemplateParameters
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string]$TemplateFile,
+    [Parameter(Mandatory = $true)][hashtable]$TemplateParameters
   )
 
-  if ($TemplateFile) {
-    if (-not (Test-Path -LiteralPath $TemplateFile -PathType Leaf)) { throw "Template file '$TemplateFile' does not exist." }
-  } elseif (-not $TemplateUri) {
-    throw "No template URI or file was supplied for '$Label'."
-  }
+  if (-not (Test-Path -LiteralPath $TemplateFile -PathType Leaf)) { throw "Template file '$TemplateFile' does not exist." }
 
   $baseName = ("anyrun-{0}-{1}" -f ($Label -replace '[^a-zA-Z0-9-]', '-').ToLowerInvariant(), (Get-Date -Format 'yyyyMMddHHmmss'))
   $maxAttempts = 5
@@ -1710,11 +1688,10 @@ function Invoke-ArmDeployment {
     $splat = @{
       Name                    = $deploymentName
       ResourceGroupName       = $ResourceGroup
+      TemplateFile            = $TemplateFile
       TemplateParameterObject = $TemplateParameters
       Mode                    = "Incremental"
     }
-    if ($TemplateFile) { $splat.TemplateFile = $TemplateFile }
-    else               { $splat.TemplateUri = $TemplateUri }
 
     try {
       Write-Step "Deploying $Label (attempt $attempt/$maxAttempts)..."
@@ -1795,7 +1772,7 @@ function Wait-FunctionRegistration {
   $path = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$FunctionAppName/functions?api-version=2022-03-01"
   for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
     try {
-      $result = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $path)
+      $result = Invoke-AzRestJson -Method GET -Path $path
       $match = @($result.value | Where-Object { $_.name.Split('/')[-1] -eq $FunctionName })
       if ($match.Count -gt 0) {
         Write-Host "  Function '$FunctionName' is registered in '$FunctionAppName'." -ForegroundColor Green
@@ -1870,7 +1847,7 @@ function Invoke-FeedsSmokeTest {
 
   $runsPath = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Logic/workflows/$LogicAppName/runs?api-version=2016-06-01&`$top=10"
   for ($attempt = 1; $attempt -le 36; $attempt++) {
-    $runs = ConvertFrom-AzRestContent -Response (Invoke-AzRestMethod -Method GET -Path $runsPath)
+    $runs = Invoke-AzRestJson -Method GET -Path $runsPath
     $run = @($runs.value | Where-Object {
       [DateTime]$_.properties.startTime -ge $triggeredAfter
     } | Sort-Object { [DateTime]$_.properties.startTime } -Descending) | Select-Object -First 1
@@ -1906,6 +1883,9 @@ if (-not $NonInteractive) {
 
 $deploySandbox = $Connector -eq "Sandbox"
 $deployFeeds = $Connector -eq "Feeds"
+if ($deployFeeds -and $DefenderIndicatorAction -eq "Disabled") {
+  throw "-DefenderIndicatorAction Disabled applies only to Sandbox. TI Feeds exists to import indicators; use Audit or Block."
+}
 if ($RotateClientSecret -and $SkipFunctionApp) {
   throw "-RotateClientSecret cannot be combined with -SkipFunctionApp because the Function App must receive the new secret."
 }
@@ -1936,20 +1916,6 @@ Ensure-Module "Microsoft.Graph.Applications" -MinimumVersion "2.40.0" -RequiredC
 )
 
 $script:ResolvedRepositoryRef = Resolve-RepositoryCommit -RepositoryName $Repository -Ref $RepositoryRef
-$encodedRoot = "https://raw.githubusercontent.com/$Repository/$($script:ResolvedRepositoryRef)/Microsoft%20Defender%20for%20Endpoint"
-$RepositoryRef = $script:ResolvedRepositoryRef
-if (-not $SandboxFunctionTemplateUri) { $SandboxFunctionTemplateUri = "$encodedRoot/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.json" }
-if (-not $SandboxLogicTemplateUri)    { $SandboxLogicTemplateUri    = "$encodedRoot/ANYRUN-Sandbox-MDE/Logic%20App/ANYRUN-Sandbox-MDE-LA.json" }
-if (-not $FeedsFunctionTemplateUri)   { $FeedsFunctionTemplateUri   = "$encodedRoot/ANYRUN-TI-Feeds-MDE/Function%20App/ANYRUN-Feeds-MDE-FA.json" }
-if (-not $FeedsLogicTemplateUri)      { $FeedsLogicTemplateUri      = "$encodedRoot/ANYRUN-TI-Feeds-MDE/Logic%20App/ANYRUN-Feeds-MDE-LA.json" }
-
-if (-not $AllowUnverifiedArtifacts) {
-  foreach ($templateUri in @($SandboxFunctionTemplateUri, $SandboxLogicTemplateUri, $FeedsFunctionTemplateUri, $FeedsLogicTemplateUri)) {
-    if ($templateUri -and -not $templateUri.StartsWith($encodedRoot, [StringComparison]::OrdinalIgnoreCase)) {
-      throw "Custom template URI '$templateUri' is outside the resolved repository commit. Use a local template file or -AllowUnverifiedArtifacts only for reviewed development artifacts."
-    }
-  }
-}
 
 $azureContext = Connect-AzureSmart -RequestedTenantId $TenantId -RequestedSubscriptionId $SubscriptionId
 $TenantId = $azureContext.Tenant.Id
@@ -2074,256 +2040,133 @@ Write-Phase "1" "Azure resources and ARM validation"
 $workspace = Ensure-LogAnalyticsWorkspace -ResourceGroupName $ResourceGroup -Name $LogAnalyticsWorkspaceName -Location $Region
 Write-Host "  Workspace: $($workspace.Name)" -ForegroundColor Green
 
+# One connector is installed per run. Collect its connector-specific values once
+# so every later phase uses the same names, credentials and labels.
+$isSandbox = $Connector -eq "Sandbox"
+$label = if ($isSandbox) { "Sandbox" } else { "TI Feeds" }
+$functionName = Get-Variable -Name "$($Connector)FunctionName" -ValueOnly
+$logicAppName = Get-Variable -Name "$($Connector)LogicAppName" -ValueOnly
+$storageAccountName = Get-Variable -Name "$($Connector)StorageAccountName" -ValueOnly
+$storageNameWasPassed = if ($isSandbox) { $sandboxStorageNameWasPassed } else { $feedsStorageNameWasPassed }
+$appId = Get-Variable -Name "$($Connector)AppId" -ValueOnly
+$appIdWasPassed = if ($isSandbox) { $sandboxAppIdWasPassed } else { $feedsAppIdWasPassed }
+$clientSecret = Get-Variable -Name "$($Connector)ClientSecret" -ValueOnly
+$apiKey = Get-Variable -Name "$($Connector)ApiKey" -ValueOnly
+$appDisplayName = Get-Variable -Name "$($Connector)AppDisplayName" -ValueOnly
+$requiredRoles = if ($isSandbox) { $sandboxRoles } else { $feedsRoles }
+$functionEntryPoint = $script:Artifacts[$Connector].FunctionDirectory
+$apiKeySetting = if ($isSandbox) { "ANYRUN_API_KEY" } else { "ANYRUN_api_key" }
+
 # On re-runs, recover the existing runtime configuration instead of forcing the
 # operator to retain secrets or creating another credential every time.
-$sandboxIdentityRecoveredFromFunction = $false
-$feedsIdentityRecoveredFromFunction = $false
-if ($deploySandbox) {
-  $sandboxExistingConfiguration = Get-ExistingFunctionConfiguration -FunctionAppName $SandboxFunctionName
-  if ($SkipFunctionApp -and -not $sandboxExistingConfiguration) {
-    throw "-SkipFunctionApp was specified, but Function App '$SandboxFunctionName' does not exist."
-  }
-  if ($sandboxExistingConfiguration) {
-    $settings = $sandboxExistingConfiguration.properties
-    $existingClientId = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientID"
-    $existingClientSecret = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientSecret"
-    $existingApiKey = Get-ObjectPropertyValue -InputObject $settings -Name "ANYRUN_API_KEY"
-    if ($existingClientId) { $existingClientId = Assert-GuidValue -Value "$existingClientId" -Name "Sandbox Function App AzureClientID" }
-    if (-not $SandboxAppId) { $SandboxAppId = $existingClientId }
-    elseif ($existingClientId -and $existingClientId -ne $SandboxAppId) {
-      throw "SandboxAppId '$SandboxAppId' does not match the existing Function App configuration."
-    }
-    if ($existingClientId -and -not $sandboxAppIdWasPassed) { $sandboxIdentityRecoveredFromFunction = $true }
-    if (-not $RotateClientSecret -and -not $SandboxClientSecret -and $existingClientSecret) {
-      $SandboxClientSecret = ConvertTo-SecureValue -Value $existingClientSecret
-    }
-    if (-not $SandboxApiKey -and $existingApiKey) {
-      $sandboxKey = "$existingApiKey" -replace '^API-KEY\s+', ''
-      $SandboxApiKey = ConvertTo-SecureValue -Value $sandboxKey
-    }
-    Write-Host "  Recovered Sandbox credentials from the existing Function App settings." -ForegroundColor Green
-  }
+$identityRecoveredFromFunction = $false
+$existingConfiguration = Get-ExistingFunctionConfiguration -FunctionAppName $functionName
+if ($SkipFunctionApp -and -not $existingConfiguration) {
+  throw "-SkipFunctionApp was specified, but Function App '$functionName' does not exist."
 }
-if ($deployFeeds) {
-  $feedsExistingConfiguration = Get-ExistingFunctionConfiguration -FunctionAppName $FeedsFunctionName
-  if ($SkipFunctionApp -and -not $feedsExistingConfiguration) {
-    throw "-SkipFunctionApp was specified, but Function App '$FeedsFunctionName' does not exist."
+if ($existingConfiguration) {
+  $settings = $existingConfiguration.properties
+  $existingClientId = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientID"
+  $existingClientSecret = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientSecret"
+  $existingApiKey = Get-ObjectPropertyValue -InputObject $settings -Name $apiKeySetting
+  if ($existingClientId) { $existingClientId = Assert-GuidValue -Value "$existingClientId" -Name "$label Function App AzureClientID" }
+  if (-not $appId) { $appId = $existingClientId }
+  elseif ($existingClientId -and $existingClientId -ne $appId) {
+    throw "$($Connector)AppId '$appId' does not match the existing Function App configuration."
   }
-  if ($feedsExistingConfiguration) {
-    $settings = $feedsExistingConfiguration.properties
-    $existingClientId = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientID"
-    $existingClientSecret = Get-ObjectPropertyValue -InputObject $settings -Name "AzureClientSecret"
-    $existingApiKey = Get-ObjectPropertyValue -InputObject $settings -Name "ANYRUN_api_key"
-    if ($existingClientId) { $existingClientId = Assert-GuidValue -Value "$existingClientId" -Name "TI Feeds Function App AzureClientID" }
-    if (-not $FeedsAppId) { $FeedsAppId = $existingClientId }
-    elseif ($existingClientId -and $existingClientId -ne $FeedsAppId) {
-      throw "FeedsAppId '$FeedsAppId' does not match the existing Function App configuration."
-    }
-    if ($existingClientId -and -not $feedsAppIdWasPassed) { $feedsIdentityRecoveredFromFunction = $true }
-    if (-not $RotateClientSecret -and -not $FeedsClientSecret -and $existingClientSecret) {
-      $FeedsClientSecret = ConvertTo-SecureValue -Value $existingClientSecret
-    }
-    if (-not $FeedsApiKey -and $existingApiKey) {
-      $FeedsApiKey = ConvertTo-SecureValue -Value $existingApiKey
-    }
-    Write-Host "  Recovered TI Feeds credentials from the existing Function App settings." -ForegroundColor Green
+  if ($existingClientId -and -not $appIdWasPassed) { $identityRecoveredFromFunction = $true }
+  if (-not $RotateClientSecret -and -not $clientSecret -and $existingClientSecret) {
+    $clientSecret = ConvertTo-SecureValue -Value $existingClientSecret
   }
+  if (-not $apiKey -and $existingApiKey) {
+    # The Sandbox template stores the key with the API-KEY prefix.
+    $apiKey = ConvertTo-SecureValue -Value ("$existingApiKey" -replace '^API-KEY\s+', '')
+  }
+  Write-Host "  Recovered $label credentials from the existing Function App settings." -ForegroundColor Green
 }
-
-$effectiveSandboxFunctionTemplate = $SandboxFunctionTemplateFile
-$removeSandboxTemplate = $false
-$effectiveFeedsFunctionTemplate = $FeedsFunctionTemplateFile
-$removeFeedsTemplate = $false
-$effectiveSandboxLogicTemplate = $SandboxLogicTemplateFile
-$effectiveFeedsLogicTemplate = $FeedsLogicTemplateFile
-$placeholderSecret = ConvertTo-SecureValue -Value "preflight-placeholder"
 if (-not $SkipFunctionApp) {
-  if ($deploySandbox) {
-    if (-not $effectiveSandboxFunctionTemplate) {
-      $effectiveSandboxFunctionTemplate = New-PreparedFunctionTemplate -TemplateUri $SandboxFunctionTemplateUri `
-        -ConnectorType Sandbox -ExpectedTemplateHash $SandboxFunctionTemplateSha256
-      $removeSandboxTemplate = $true
-    }
-    Test-ArmDeployment -Label "Sandbox Function App" -TemplateUri $SandboxFunctionTemplateUri `
-      -TemplateFile $effectiveSandboxFunctionTemplate -TemplateParameters @{
-        functionAppName = $SandboxFunctionName; AzureTenantID = $TenantId
-        AzureClientID = "00000000-0000-0000-0000-000000000000"; AzureClientSecret = $placeholderSecret
-        AzureStorageAccountName = $SandboxStorageAccountName; AzureStorageAccountKey = $placeholderSecret
-        AzureStorageConnectionString = $placeholderSecret; AzureBlobContainerName = $SandboxBlobContainerName
-        ANYRUN_API_KEY = $placeholderSecret; DefenderIndicatorAction = $DefenderIndicatorAction
-        DefenderIndicatorGenerateAlert = $DefenderIndicatorGenerateAlert
-        ConfigureEvidenceLifecyclePolicy = $false
-        LogAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
-      }
-  }
-  if ($deployFeeds) {
-    if (-not $effectiveFeedsFunctionTemplate) {
-      $effectiveFeedsFunctionTemplate = New-PreparedFunctionTemplate -TemplateUri $FeedsFunctionTemplateUri `
-        -ConnectorType Feeds -ExpectedTemplateHash $FeedsFunctionTemplateSha256
-      $removeFeedsTemplate = $true
-    }
-    Test-ArmDeployment -Label "TI Feeds Function App" -TemplateUri $FeedsFunctionTemplateUri `
-      -TemplateFile $effectiveFeedsFunctionTemplate -TemplateParameters @{
-        functionAppName = $FeedsFunctionName; anyrunApiKey = $placeholderSecret
-        AzureClientID = "00000000-0000-0000-0000-000000000000"; AzureClientSecret = $placeholderSecret
-        AzureTenantID = $TenantId; AzureStorageAccountName = $FeedsStorageAccountName
-        AzureStorageConnectionString = $placeholderSecret; LogAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
-        DefenderIndicatorAction = $DefenderIndicatorAction
-      }
-  }
+  $existingIndicatorAction = if ($existingConfiguration) {
+    "$(Get-ObjectPropertyValue -InputObject $existingConfiguration.properties -Name 'DefenderIndicatorAction')"
+  } else { "" }
+  $DefenderIndicatorAction = Select-IndicatorAction -ConnectorType $Connector -Requested $DefenderIndicatorAction `
+    -WasPassed $indicatorActionWasPassed -ExistingValue $existingIndicatorAction
+  Write-Host "  Indicator action: $DefenderIndicatorAction" -ForegroundColor Green
 }
 
+$artifacts = Get-ConnectorArtifacts -ConnectorType $Connector
+
+# Installer and Azure App instances share names. Original installer instances
+# keep the template default: plan and Application Insights named after the app.
+$hostingPlanName = $functionName
+$appInsightsName = $functionName
+if (-not $useLegacyNames) {
+  $baseName = "ANYRUN-$Connector-MDE-$InstanceName"
+  $hostingPlanName = Select-ExistingResourceName -PreferredName "$baseName-Plan" `
+    -ResourceType 'Microsoft.Web/serverfarms' -PreviousNames @($functionName) -Resources $existingResources
+  $appInsightsName = Select-ExistingResourceName -PreferredName "$baseName-AI" `
+    -ResourceType 'Microsoft.Insights/components' -PreviousNames @($functionName) -Resources $existingResources
+}
+$names = @{
+  FunctionApp = $functionName; HostingPlan = $hostingPlanName; AppInsights = $appInsightsName
+  LogicApp = $logicAppName; PackageUri = $artifacts.PackageUri
+}
+
+$placeholderSecret = ConvertTo-SecureValue -Value "preflight-placeholder"
+$placeholderClientId = "00000000-0000-0000-0000-000000000000"
+if (-not $SkipFunctionApp) {
+  Test-ArmDeployment -Label "$label Function App" -TemplateFile $artifacts.FunctionTemplate `
+    -TemplateParameters (Get-FunctionTemplateParameters -Names $names -ClientId $placeholderClientId `
+      -ClientSecret $placeholderSecret -StorageAccountName $storageAccountName -StorageKey $placeholderSecret `
+      -StorageConnectionString $placeholderSecret -ApiKey $placeholderSecret -ConfigureLifecyclePolicy $false)
+}
 if (-not $SkipLogicApp) {
-  if ($deploySandbox -and -not $effectiveSandboxLogicTemplate) {
-    $effectiveSandboxLogicTemplate = New-RegionalLogicTemplate -TemplateUri $SandboxLogicTemplateUri `
-      -ConnectorType Sandbox -ExpectedTemplateHash $SandboxLogicTemplateSha256
-  }
-  if ($deployFeeds -and -not $effectiveFeedsLogicTemplate) {
-    $effectiveFeedsLogicTemplate = New-RegionalLogicTemplate -TemplateUri $FeedsLogicTemplateUri `
-      -ConnectorType Feeds -ExpectedTemplateHash $FeedsLogicTemplateSha256
-  }
-  if ($deploySandbox) {
-    Test-ArmDeployment -Label "Sandbox Logic App" -TemplateUri $SandboxLogicTemplateUri `
-      -TemplateFile $effectiveSandboxLogicTemplate -TemplateParameters @{
-        logicAppName = $SandboxLogicAppName; azureTenantId = $TenantId
-        azureClientId = "00000000-0000-0000-0000-000000000000"; azureClientSecret = $placeholderSecret
-        functionAppName = $SandboxFunctionName; analysisPrivacyType = $SandboxAnalysisPrivacyType
-      }
-  }
-  if ($deployFeeds) {
-    Test-ArmDeployment -Label "TI Feeds Logic App" -TemplateUri $FeedsLogicTemplateUri `
-      -TemplateFile $effectiveFeedsLogicTemplate -TemplateParameters @{
-        logicAppName = $FeedsLogicAppName; intervalRecurrence = $FeedsIntervalHours
-        feedFetchDepth = $FeedsFetchDepthDays; minimum_confidence_threshold = $FeedsMinimumConfidence
-        functionAppName = $FeedsFunctionName
-      }
-  }
+  Test-ArmDeployment -Label "$label Logic App" -TemplateFile $artifacts.LogicTemplate `
+    -TemplateParameters (Get-LogicTemplateParameters -Names $names -ClientId $placeholderClientId -ClientSecret $placeholderSecret)
 }
 
-$sandboxStorage = $null
-$feedsStorage = $null
-if ($deploySandbox) {
-  $sandboxStorage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $SandboxStorageAccountName.ToLowerInvariant() -Location $Region
-  if (-not $SandboxApiKey) { $SandboxApiKey = Read-RequiredSecret "  ANY.RUN Sandbox API key (without the 'API-KEY ' prefix)" -HelpText "Use the Sandbox API key from your ANY.RUN account API settings. It is separate from the TI Feeds key; omit the API-KEY prefix." }
-}
-if ($deployFeeds) {
-  $feedsStorage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $FeedsStorageAccountName.ToLowerInvariant() -Location $Region
-  if (-not $FeedsApiKey) { $FeedsApiKey = Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)" -HelpText "Use the TI Feeds API key issued for your ANY.RUN Threat Intelligence subscription. Enter the raw key without an Authorization header or authentication prefix." }
+$storage = Ensure-StorageAccount -ResourceGroupName $ResourceGroup -Name $storageAccountName.ToLowerInvariant() -Location $Region
+if (-not $apiKey) {
+  $apiKey = if ($isSandbox) {
+    Read-RequiredSecret "  ANY.RUN Sandbox API key (without the 'API-KEY ' prefix)" -HelpText "Use the Sandbox API key from your ANY.RUN account API settings. It is separate from the TI Feeds key; omit the API-KEY prefix."
+  } else {
+    Read-RequiredSecret "  ANY.RUN TI Feeds API key (without a prefix)" -HelpText "Use the TI Feeds API key issued for your ANY.RUN Threat Intelligence subscription. Enter the raw key without an Authorization header or authentication prefix."
+  }
 }
 
 Write-Phase "2" "App Registration and API permissions"
-$sandboxIdentity = $null
-$feedsIdentity = $null
+$identity = Ensure-ConnectorIdentity -Label $label -DisplayName $appDisplayName `
+  -ExistingAppId $appId -ExistingClientSecret $clientSecret -RequiredRoleValues $requiredRoles `
+  -TrustedExistingFunctionBinding $identityRecoveredFromFunction -RotateSecret:$RotateClientSecret
 
-if ($deploySandbox) {
-  $sandboxIdentity = Ensure-ConnectorIdentity -Label "Sandbox" -DisplayName $SandboxAppDisplayName `
-    -ExistingAppId $SandboxAppId -ExistingClientSecret $SandboxClientSecret -RequiredRoleValues $sandboxRoles `
-    -TrustedExistingFunctionBinding $sandboxIdentityRecoveredFromFunction -RotateSecret:$RotateClientSecret
-}
-if ($deployFeeds) {
-  $feedsIdentity = Ensure-ConnectorIdentity -Label "TI Feeds" -DisplayName $FeedsAppDisplayName `
-    -ExistingAppId $FeedsAppId -ExistingClientSecret $FeedsClientSecret -RequiredRoleValues $feedsRoles `
-    -TrustedExistingFunctionBinding $feedsIdentityRecoveredFromFunction -RotateSecret:$RotateClientSecret
-}
-
-Write-Phase "3" "Function Apps"
-$sandboxFunctionDeployed = $false
-$feedsFunctionDeployed = $false
-if ($deploySandbox -and -not $SkipFunctionApp) {
-  Remove-LegacyStorageRoleAssignment -StorageAccountName $sandboxStorage.Name `
-    -FunctionAppName $SandboxFunctionName -ConnectorType Sandbox
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $sandboxStorage.Name `
-    -AllowRoleCleanup (-not $sandboxStorageNameWasPassed)
-  $sandboxFunctionParameters = @{
-    functionAppName              = $SandboxFunctionName
-    AzureTenantID                = $TenantId
-    AzureClientID                = $sandboxIdentity.ClientId
-    AzureClientSecret            = $sandboxIdentity.ClientSecret
-    AzureStorageAccountName      = $sandboxStorage.Name
-    AzureStorageAccountKey       = $sandboxStorage.Key
-    AzureStorageConnectionString = $sandboxStorage.ConnectionString
-    AzureBlobContainerName       = $SandboxBlobContainerName
-    ANYRUN_API_KEY               = $SandboxApiKey
-    DefenderIndicatorAction      = $DefenderIndicatorAction
-    DefenderIndicatorGenerateAlert = $DefenderIndicatorGenerateAlert
-    ConfigureEvidenceLifecyclePolicy = [bool]$sandboxStorage.Created
-    LogAnalyticsWorkspaceName    = $LogAnalyticsWorkspaceName
-  }
-  try {
-    Invoke-ArmDeployment -Label "Sandbox Function App" -TemplateUri $SandboxFunctionTemplateUri `
-      -TemplateFile $effectiveSandboxFunctionTemplate -TemplateParameters $sandboxFunctionParameters | Out-Null
-    $sandboxFunctionDeployed = $true
-  } finally {
-    if ($removeSandboxTemplate) { Remove-Item -LiteralPath $effectiveSandboxFunctionTemplate -Force -ErrorAction SilentlyContinue }
-  }
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $sandboxStorage.Name `
-    -AllowRoleCleanup (-not $sandboxStorageNameWasPassed)
+Write-Phase "3" "Function App"
+$functionDeployed = $false
+if (-not $SkipFunctionApp) {
+  Remove-LegacyStorageRoleAssignment -StorageAccountName $storage.Name -FunctionAppName $functionName -ConnectorType $Connector
+  Remove-ConnectorDeploymentArtifacts -StorageAccountName $storage.Name -AllowRoleCleanup (-not $storageNameWasPassed)
+  $functionParameters = Get-FunctionTemplateParameters -Names $names -ClientId $identity.ClientId `
+    -ClientSecret $identity.ClientSecret -StorageAccountName $storage.Name -StorageKey $storage.Key `
+    -StorageConnectionString $storage.ConnectionString -ApiKey $apiKey -ConfigureLifecyclePolicy ([bool]$storage.Created)
+  Invoke-ArmDeployment -Label "$label Function App" -TemplateFile $artifacts.FunctionTemplate `
+    -TemplateParameters $functionParameters | Out-Null
+  $functionDeployed = $true
+  # The template now grants Storage Blob Data Contributor. Remove the Owner
+  # grant created by earlier template versions only after the new role exists.
+  Remove-LegacyStorageRoleAssignment -StorageAccountName $storage.Name -FunctionAppName $functionName `
+    -ConnectorType $Connector -SupersededOwner
+  Remove-ConnectorDeploymentArtifacts -StorageAccountName $storage.Name -AllowRoleCleanup (-not $storageNameWasPassed)
+} else {
+  Write-Host "  Function App deployment skipped; the existing app will be verified before Logic App deployment." -ForegroundColor Yellow
 }
 
-if ($deployFeeds -and -not $SkipFunctionApp) {
-  Remove-LegacyStorageRoleAssignment -StorageAccountName $feedsStorage.Name `
-    -FunctionAppName $FeedsFunctionName -ConnectorType Feeds
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $feedsStorage.Name `
-    -AllowRoleCleanup (-not $feedsStorageNameWasPassed)
-  $feedsFunctionParameters = @{
-    functionAppName              = $FeedsFunctionName
-    anyrunApiKey                 = $FeedsApiKey
-    AzureClientID                = $feedsIdentity.ClientId
-    AzureClientSecret            = $feedsIdentity.ClientSecret
-    AzureTenantID                = $TenantId
-    AzureStorageAccountName      = $feedsStorage.Name
-    AzureStorageConnectionString = $feedsStorage.ConnectionString
-    LogAnalyticsWorkspaceName    = $LogAnalyticsWorkspaceName
-    DefenderIndicatorAction      = $DefenderIndicatorAction
-  }
-  try {
-    Invoke-ArmDeployment -Label "TI Feeds Function App" -TemplateUri $FeedsFunctionTemplateUri `
-      -TemplateFile $effectiveFeedsFunctionTemplate -TemplateParameters $feedsFunctionParameters | Out-Null
-    $feedsFunctionDeployed = $true
-  } finally {
-    if ($removeFeedsTemplate) { Remove-Item -LiteralPath $effectiveFeedsFunctionTemplate -Force -ErrorAction SilentlyContinue }
-  }
-  Remove-ConnectorDeploymentArtifacts -StorageAccountName $feedsStorage.Name `
-    -AllowRoleCleanup (-not $feedsStorageNameWasPassed)
-}
-if ($SkipFunctionApp) {
-  Write-Host "  Function App deployment skipped; existing apps will be verified before Logic App deployment." -ForegroundColor Yellow
-}
-
-Write-Phase "4" "Logic Apps"
-$sandboxLogicDeployed = $false
-$feedsLogicDeployed = $false
-if ($deploySandbox -and -not $SkipLogicApp -and -not $sandboxIdentity.ConsentDeferred) {
-  Wait-FunctionRegistration -FunctionAppName $SandboxFunctionName -FunctionName "ANYRUN-Sandbox-MDE-FA"
-  $sandboxLogicParameters = @{
-    logicAppName      = $SandboxLogicAppName
-    azureTenantId     = $TenantId
-    azureClientId     = $sandboxIdentity.ClientId
-    azureClientSecret = $sandboxIdentity.ClientSecret
-    functionAppName   = $SandboxFunctionName
-    analysisPrivacyType = $SandboxAnalysisPrivacyType
-  }
-  Invoke-ArmDeployment -Label "Sandbox Logic App" -TemplateUri $SandboxLogicTemplateUri `
-    -TemplateFile $effectiveSandboxLogicTemplate -TemplateParameters $sandboxLogicParameters | Out-Null
-  $sandboxLogicDeployed = $true
-} elseif ($deploySandbox -and $sandboxIdentity.ConsentDeferred) {
-  Write-Host "  Sandbox Logic App skipped because Defender admin consent is not complete." -ForegroundColor Yellow
-}
-
-if ($deployFeeds -and -not $SkipLogicApp -and -not $feedsIdentity.ConsentDeferred) {
-  Wait-FunctionRegistration -FunctionAppName $FeedsFunctionName -FunctionName "ANYRUN-Feeds-MDE-FA"
-  $feedsLogicParameters = @{
-    logicAppName               = $FeedsLogicAppName
-    intervalRecurrence         = $FeedsIntervalHours
-    feedFetchDepth             = $FeedsFetchDepthDays
-    minimum_confidence_threshold = $FeedsMinimumConfidence
-    functionAppName            = $FeedsFunctionName
-  }
-  Invoke-ArmDeployment -Label "TI Feeds Logic App" -TemplateUri $FeedsLogicTemplateUri `
-    -TemplateFile $effectiveFeedsLogicTemplate -TemplateParameters $feedsLogicParameters | Out-Null
-  $feedsLogicDeployed = $true
-} elseif ($deployFeeds -and $feedsIdentity.ConsentDeferred) {
-  Write-Host "  TI Feeds Logic App skipped because Defender admin consent is not complete." -ForegroundColor Yellow
+Write-Phase "4" "Logic App"
+$logicDeployed = $false
+if (-not $SkipLogicApp -and -not $identity.ConsentDeferred) {
+  Wait-FunctionRegistration -FunctionAppName $functionName -FunctionName $functionEntryPoint
+  Invoke-ArmDeployment -Label "$label Logic App" -TemplateFile $artifacts.LogicTemplate `
+    -TemplateParameters (Get-LogicTemplateParameters -Names $names -ClientId $identity.ClientId -ClientSecret $identity.ClientSecret) | Out-Null
+  $logicDeployed = $true
+} elseif ($identity.ConsentDeferred) {
+  Write-Host "  $label Logic App skipped because Defender admin consent is not complete." -ForegroundColor Yellow
 }
 if ($SkipLogicApp) {
   Write-Host "  Logic App deployment was skipped by -SkipLogicApp." -ForegroundColor Yellow
@@ -2331,55 +2174,36 @@ if ($SkipLogicApp) {
 
 Write-Phase "5" "Verification"
 $verificationFailures = [System.Collections.Generic.List[string]]::new()
-$sandboxLogicState = if ($SkipLogicApp) { "SKIPPED (-SkipLogicApp)" } else { "NOT DEPLOYED (Defender admin consent pending)" }
-$feedsLogicState = $sandboxLogicState
-if ($deploySandbox) {
-  try { Wait-FunctionRegistration -FunctionAppName $SandboxFunctionName -FunctionName "ANYRUN-Sandbox-MDE-FA" -Attempts 1 }
-  catch { $verificationFailures.Add($_.Exception.Message) }
-  $sandboxFunctionState = Get-ResourceProvisioningState -ResourceType "Microsoft.Web/sites" -Name $SandboxFunctionName
-  Write-Host "  Sandbox Function App : $sandboxFunctionState" -ForegroundColor White
-  if ($sandboxFunctionState -notin @("Running", "Succeeded")) { $verificationFailures.Add("Sandbox Function App state is '$sandboxFunctionState'.") }
-  if ($sandboxLogicDeployed -or (-not $SkipLogicApp -and -not $sandboxIdentity.ConsentDeferred)) {
-    $sandboxLogicState = Get-ResourceProvisioningState -ResourceType "Microsoft.Logic/workflows" -Name $SandboxLogicAppName
-    $sandboxConnectionState = Get-ApiConnectionStatus -Name "wdatp--anyrun-app"
-    Write-Host "  Sandbox Logic App    : $sandboxLogicState" -ForegroundColor White
-    Write-Host "  WDATP connection     : $sandboxConnectionState" -ForegroundColor White
-    if ($sandboxLogicState -ne "Succeeded") { $verificationFailures.Add("Sandbox Logic App state is '$sandboxLogicState'.") }
-    if ($sandboxConnectionState -ne "Connected") { $verificationFailures.Add("WDATP API connection state is '$sandboxConnectionState'.") }
-  }
-}
-if ($deployFeeds) {
-  try { Wait-FunctionRegistration -FunctionAppName $FeedsFunctionName -FunctionName "ANYRUN-Feeds-MDE-FA" -Attempts 1 }
-  catch { $verificationFailures.Add($_.Exception.Message) }
-  $feedsFunctionState = Get-ResourceProvisioningState -ResourceType "Microsoft.Web/sites" -Name $FeedsFunctionName
-  Write-Host "  Feeds Function App   : $feedsFunctionState" -ForegroundColor White
-  if ($feedsFunctionState -notin @("Running", "Succeeded")) { $verificationFailures.Add("Feeds Function App state is '$feedsFunctionState'.") }
-  if ($feedsLogicDeployed -or (-not $SkipLogicApp -and -not $feedsIdentity.ConsentDeferred)) {
-    $feedsLogicState = Get-ResourceProvisioningState -ResourceType "Microsoft.Logic/workflows" -Name $FeedsLogicAppName
-    Write-Host "  Feeds Logic App      : $feedsLogicState" -ForegroundColor White
-    if ($feedsLogicState -ne "Succeeded") { $verificationFailures.Add("Feeds Logic App state is '$feedsLogicState'.") }
-    if ($TestFeedsInvocation -and $feedsLogicState -eq "Succeeded") {
-      try { Invoke-FeedsSmokeTest -LogicAppName $FeedsLogicAppName }
-      catch { $verificationFailures.Add("Feeds Logic App smoke test failed: $($_.Exception.Message)") }
-    }
+$logicState = if ($SkipLogicApp) { "SKIPPED (-SkipLogicApp)" } else { "NOT DEPLOYED (Defender admin consent pending)" }
+try { Wait-FunctionRegistration -FunctionAppName $functionName -FunctionName $functionEntryPoint -Attempts 1 }
+catch { $verificationFailures.Add($_.Exception.Message) }
+$functionState = Get-ResourceProvisioningState -ResourceType "Microsoft.Web/sites" -Name $functionName
+Write-Host ("  {0,-20} : {1}" -f "$Connector Function App", $functionState) -ForegroundColor White
+if ($functionState -notin @("Running", "Succeeded")) { $verificationFailures.Add("$Connector Function App state is '$functionState'.") }
+if ($logicDeployed -or (-not $SkipLogicApp -and -not $identity.ConsentDeferred)) {
+  $logicState = Get-ResourceProvisioningState -ResourceType "Microsoft.Logic/workflows" -Name $logicAppName
+  Write-Host ("  {0,-20} : {1}" -f "$Connector Logic App", $logicState) -ForegroundColor White
+  if ($logicState -ne "Succeeded") { $verificationFailures.Add("$Connector Logic App state is '$logicState'.") }
+  if ($isSandbox) {
+    $connectionState = Get-ApiConnectionStatus -Name "wdatp--anyrun-app"
+    Write-Host ("  {0,-20} : {1}" -f "WDATP connection", $connectionState) -ForegroundColor White
+    if ($connectionState -ne "Connected") { $verificationFailures.Add("WDATP API connection state is '$connectionState'.") }
+  } elseif ($TestFeedsInvocation -and $logicState -eq "Succeeded") {
+    try { Invoke-FeedsSmokeTest -LogicAppName $logicAppName }
+    catch { $verificationFailures.Add("Feeds Logic App smoke test failed: $($_.Exception.Message)") }
   }
 }
 
-if ($verificationFailures.Count -eq 0) {
-  if (-not $ForceGraphDeviceCode -and (($deploySandbox -and $sandboxIdentity.NewCredentialKeyId) -or ($deployFeeds -and $feedsIdentity.NewCredentialKeyId))) {
-    Connect-GraphSmart -RequestedTenantId $TenantId
-  }
-  if ($deploySandbox -and $sandboxFunctionDeployed -and $sandboxLogicDeployed -and -not $sandboxIdentity.ConsentDeferred -and $sandboxIdentity.NewCredentialKeyId) {
-    Remove-OldConnectorSecrets -ApplicationObjectId $sandboxIdentity.ApplicationObjectId `
-      -CurrentKeyId $sandboxIdentity.NewCredentialKeyId -Label "Sandbox"
-  }
-  if ($deployFeeds -and $feedsFunctionDeployed -and $feedsLogicDeployed -and -not $feedsIdentity.ConsentDeferred -and $feedsIdentity.NewCredentialKeyId) {
-    Remove-OldConnectorSecrets -ApplicationObjectId $feedsIdentity.ApplicationObjectId `
-      -CurrentKeyId $feedsIdentity.NewCredentialKeyId -Label "TI Feeds"
-  }
+# Old installer-created secrets are removed only after both consumers (Function
+# App settings and the Logic App connection) received the new one.
+if ($verificationFailures.Count -eq 0 -and $functionDeployed -and $logicDeployed -and
+    -not $identity.ConsentDeferred -and $identity.NewCredentialKeyId) {
+  if (-not $ForceGraphDeviceCode) { Connect-GraphSmart -RequestedTenantId $TenantId }
+  Remove-OldConnectorSecrets -ApplicationObjectId $identity.ApplicationObjectId `
+    -CurrentKeyId $identity.NewCredentialKeyId -Label $label
 }
 
-$logicAppsIncomplete = $SkipLogicApp -or ($deploySandbox -and $sandboxIdentity.ConsentDeferred) -or ($deployFeeds -and $feedsIdentity.ConsentDeferred)
+$logicAppsIncomplete = $SkipLogicApp -or $identity.ConsentDeferred
 if ($verificationFailures.Count -gt 0 -or $logicAppsIncomplete) {
   Write-Banner "Deployment summary - INCOMPLETE"
 } else {
@@ -2389,20 +2213,11 @@ Write-Host "  Resource group : $ResourceGroup" -ForegroundColor White
 Write-Host "  Region         : $Region" -ForegroundColor White
 Write-Host "  Instance       : $(if ($useLegacyNames) { 'legacy' } else { $InstanceName })" -ForegroundColor White
 Write-Host "  Log Analytics  : $LogAnalyticsWorkspaceName" -ForegroundColor White
-if ($deploySandbox) {
-  Write-Host ""
-  Write-Host "  Sandbox App Registration : $($sandboxIdentity.DisplayName) ($($sandboxIdentity.ClientId))" -ForegroundColor White
-  Write-Host "  Sandbox Function App     : $SandboxFunctionName" -ForegroundColor White
-  Write-Host "  Sandbox Logic App        : $SandboxLogicAppName [$sandboxLogicState]" -ForegroundColor $(if ($sandboxLogicState -eq 'Succeeded') { 'White' } else { 'Yellow' })
-  Write-Host "  Sandbox Storage          : $($sandboxStorage.Name)" -ForegroundColor White
-}
-if ($deployFeeds) {
-  Write-Host ""
-  Write-Host "  Feeds App Registration   : $($feedsIdentity.DisplayName) ($($feedsIdentity.ClientId))" -ForegroundColor White
-  Write-Host "  Feeds Function App       : $FeedsFunctionName" -ForegroundColor White
-  Write-Host "  Feeds Logic App          : $FeedsLogicAppName [$feedsLogicState]" -ForegroundColor $(if ($feedsLogicState -eq 'Succeeded') { 'White' } else { 'Yellow' })
-  Write-Host "  Feeds Storage            : $($feedsStorage.Name)" -ForegroundColor White
-}
+Write-Host ""
+Write-Host ("  {0,-24} : {1} ({2})" -f "$Connector App Registration", $identity.DisplayName, $identity.ClientId) -ForegroundColor White
+Write-Host ("  {0,-24} : {1}" -f "$Connector Function App", $functionName) -ForegroundColor White
+Write-Host ("  {0,-24} : {1} [{2}]" -f "$Connector Logic App", $logicAppName, $logicState) -ForegroundColor $(if ($logicState -eq 'Succeeded') { 'White' } else { 'Yellow' })
+Write-Host ("  {0,-24} : {1}" -f "$Connector Storage", $storage.Name) -ForegroundColor White
 
 if ($script:DeferredConsentUrls.Count -gt 0) {
   Write-Host ""
@@ -2410,31 +2225,23 @@ if ($script:DeferredConsentUrls.Count -gt 0) {
   $script:DeferredConsentUrls | Sort-Object -Unique | ForEach-Object { Write-Host "    $_" -ForegroundColor Cyan }
   Write-Host "  After consent is granted, resume without redeploying the Function App:" -ForegroundColor Yellow
   $continuationArguments = [System.Collections.Generic.List[string]]::new()
-  $continuationArguments.Add("-Connector $(ConvertTo-PowerShellLiteral $Connector)")
-  $continuationArguments.Add("-TenantId $(ConvertTo-PowerShellLiteral $TenantId)")
-  $continuationArguments.Add("-SubscriptionId $(ConvertTo-PowerShellLiteral $SubscriptionId)")
-  $continuationArguments.Add("-ResourceGroup $(ConvertTo-PowerShellLiteral $ResourceGroup)")
-  $continuationArguments.Add("-InstanceName $(ConvertTo-PowerShellLiteral $InstanceName)")
-  $continuationArguments.Add("-Region $(ConvertTo-PowerShellLiteral $Region)")
-  $continuationArguments.Add("-LogAnalyticsWorkspaceName $(ConvertTo-PowerShellLiteral $LogAnalyticsWorkspaceName)")
-  $continuationArguments.Add("-Repository $(ConvertTo-PowerShellLiteral $Repository)")
-  $continuationArguments.Add("-RepositoryRef $(ConvertTo-PowerShellLiteral $RepositoryRef)")
-  if ($deploySandbox) {
-    $continuationArguments.Add("-SandboxFunctionName $(ConvertTo-PowerShellLiteral $SandboxFunctionName)")
-    $continuationArguments.Add("-SandboxLogicAppName $(ConvertTo-PowerShellLiteral $SandboxLogicAppName)")
-    $continuationArguments.Add("-SandboxStorageAccountName $(ConvertTo-PowerShellLiteral $SandboxStorageAccountName)")
-    $continuationArguments.Add("-SandboxAnalysisPrivacyType $(ConvertTo-PowerShellLiteral $SandboxAnalysisPrivacyType)")
+  $continuationValues = [ordered]@{
+    Connector = $Connector; TenantId = $TenantId; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroup
+    InstanceName = $InstanceName; Region = $Region; LogAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
+    "$($Connector)FunctionName" = $functionName; "$($Connector)LogicAppName" = $logicAppName
+    "$($Connector)StorageAccountName" = $storageAccountName
   }
-  if ($deployFeeds) {
-    $continuationArguments.Add("-FeedsFunctionName $(ConvertTo-PowerShellLiteral $FeedsFunctionName)")
-    $continuationArguments.Add("-FeedsLogicAppName $(ConvertTo-PowerShellLiteral $FeedsLogicAppName)")
-    $continuationArguments.Add("-FeedsStorageAccountName $(ConvertTo-PowerShellLiteral $FeedsStorageAccountName)")
+  foreach ($argument in $continuationValues.GetEnumerator()) {
+    $continuationArguments.Add("-$($argument.Key) $(ConvertTo-PowerShellLiteral "$($argument.Value)")")
+  }
+  if ($isSandbox) {
+    $continuationArguments.Add("-SandboxAnalysisPrivacyType $(ConvertTo-PowerShellLiteral $SandboxAnalysisPrivacyType)")
   }
   $continuationArguments.Add("-SkipFunctionApp")
   Write-Host "    ./Deploy-ANYRUNMDEConnector.ps1 $($continuationArguments -join ' ')" -ForegroundColor Cyan
 }
 
-if ($deploySandbox) {
+if ($isSandbox) {
   Write-Host ""
   Write-Host "  ACTION REQUIRED - Defender for Endpoint settings:" -ForegroundColor Yellow
   Write-Host "    1. Open https://security.microsoft.com" -ForegroundColor White
@@ -2460,7 +2267,7 @@ if ($logicAppsIncomplete) {
   if ($SkipLogicApp) {
     Write-Host "Resume with the same connector, resource group and instance name, without -SkipLogicApp. Use -SkipFunctionApp to reuse the verified Function App." -ForegroundColor Yellow
   }
-  if (($deploySandbox -and $sandboxIdentity.ConsentDeferred) -or ($deployFeeds -and $feedsIdentity.ConsentDeferred)) {
+  if ($identity.ConsentDeferred) {
     Write-Host "Grant Defender admin consent, then run the continuation command shown above to deploy the Logic App." -ForegroundColor Yellow
   }
 } else {

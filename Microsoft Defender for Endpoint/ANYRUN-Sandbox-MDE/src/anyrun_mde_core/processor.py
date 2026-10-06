@@ -39,6 +39,8 @@ def process_alert(
     """Resume saved tasks before collecting any new evidence."""
     _check_deadline(deadline_monotonic)
     ms_defender = MicrosoftDefender(log, deadline_monotonic=deadline_monotonic)
+    # Validate the IOC setting before any paid submission.
+    ms_defender.get_indicator_action()
     ms_defender.deduplicate_comments = bool((resume_state or {}).get('work_started_at'))
     saved = list((resume_state or {}).get('analyses') or [])
     latest = (resume_state or {}).get('latest_analysis')
@@ -234,8 +236,12 @@ def process_analysis(
     indicators = connector.get_analysis_report(task_uuid, report_format='ioc')
     valid = clear_indicators(indicators) or []
     if not item.get('ioc_imported'):
-        rejected = (ms_defender.submit_indicators(valid, task_uuid) or []) if valid else []
-        item.update(indicators_count=len(valid), rejected_indicators_count=len(rejected), ioc_imported=True)
+        # Microsoft requires alerts for Audit, so the only quiet option is to
+        # keep IOCs out of Defender and report them in alert comments only.
+        import_enabled = ms_defender.get_indicator_action() != 'Disabled'
+        rejected = (ms_defender.submit_indicators(valid, task_uuid) or []) if valid and import_enabled else []
+        item.update(indicators_count=len(valid), rejected_indicators_count=len(rejected), ioc_imported=True,
+                    indicator_import_disabled=not import_enabled)
         save('enriching_alert')
     if item.get('rejected_indicators_count') and not item.get('ioc_rejections_commented'):
         ms_defender.add_comment(
@@ -251,7 +257,8 @@ def process_analysis(
         item['ioc_commented'] = True
         save('enriching_alert')
     if not item.get('summary_commented'):
-        ms_defender.add_summary_comment(alert_id, item['evidence'], item['verdict'], report)
+        ms_defender.add_summary_comment(alert_id, item['evidence'], item['verdict'], report,
+                                        indicators_imported=not item.get('indicator_import_disabled'))
         item['summary_commented'] = True
         save('enriching_alert')
     item['enriched'] = True

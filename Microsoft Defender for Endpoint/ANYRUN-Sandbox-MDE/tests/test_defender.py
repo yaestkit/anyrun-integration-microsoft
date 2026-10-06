@@ -362,6 +362,7 @@ class MicrosoftDefenderTests(unittest.TestCase):
             'get_env_variable',
             side_effect=lambda name, default=None: {
                 'DefenderIndicatorAction': 'Audit',
+                # Ignored since GenerateAlert is mandatory for Audit.
                 'DefenderIndicatorGenerateAlert': 'false',
             }.get(name, default),
         ):
@@ -372,9 +373,50 @@ class MicrosoftDefenderTests(unittest.TestCase):
 
         request_payload = defender._make_request.call_args.kwargs['data']
         self.assertIn('"action": "Audit"', request_payload)
-        self.assertIn('"generateAlert": false', request_payload)
+        self.assertIn('"generateAlert": true', request_payload)
         self.assertNotIn('Allowed', request_payload)
         self.assertEqual(failures, [])
+
+    def test_block_indicators_also_generate_alerts(self):
+        defender = make_defender(self.module)
+        defender._make_request = Mock(return_value=FakeResponse(200, {
+            'value': [{'indicator': 'example.test', 'isFailed': False}],
+        }))
+        with patch.object(self.module, 'get_env_variable',
+                          side_effect=lambda name, default=None: {'DefenderIndicatorAction': 'Block'}.get(name, default)):
+            defender.submit_indicators([{'ioc': 'example.test', 'type': 'domain', 'reputation': 2}], 'task-id')
+        request_payload = defender._make_request.call_args.kwargs['data']
+        self.assertIn('"action": "Block"', request_payload)
+        self.assertIn('"generateAlert": true', request_payload)
+
+    def test_disabled_indicator_action_never_calls_import_api(self):
+        defender = make_defender(self.module)
+        defender._make_request = Mock()
+        with patch.object(self.module, 'get_env_variable',
+                          side_effect=lambda name, default=None: {'DefenderIndicatorAction': 'Disabled'}.get(name, default)):
+            self.assertEqual(defender.get_indicator_action(), 'Disabled')
+            with self.assertRaisesRegex(ValueError, 'disabled'):
+                defender.submit_indicators([{'ioc': 'example.test', 'type': 'domain', 'reputation': 2}], 'task-id')
+        defender._make_request.assert_not_called()
+
+    def test_unknown_indicator_action_is_rejected(self):
+        defender = make_defender(self.module)
+        for value in ('Allowed', 'Warn', 'audit'):
+            with self.subTest(value=value), patch.object(
+                self.module, 'get_env_variable',
+                side_effect=lambda name, default=None, value=value: {'DefenderIndicatorAction': value}.get(name, default),
+            ):
+                with self.assertRaisesRegex(ValueError, 'Audit, Block or Disabled'):
+                    defender.get_indicator_action()
+
+    def test_summary_comment_states_when_indicator_import_is_disabled(self):
+        enabled = self.module.generate_analysis_summary_comment('sample.exe', 'Malicious', 90, 'https://app.any.run/tasks/t')
+        disabled = self.module.generate_analysis_summary_comment(
+            'sample.exe', 'Malicious', 90, 'https://app.any.run/tasks/t', indicators_imported=False)
+        self.assertIn('System/Settings/Endpoints/Rules/Indicators', enabled)
+        self.assertNotIn('System/Settings/Endpoints/Rules/Indicators', disabled)
+        self.assertIn('Indicator import into Microsoft Defender is disabled', disabled)
+        self.assertIn('https://app.any.run/tasks/t', disabled)
 
     def test_sandbox_indicator_rejections_are_returned(self):
         defender = make_defender(self.module)

@@ -541,6 +541,31 @@ class ProcessorTests(unittest.TestCase):
         defender_client.add_summary_comment.assert_called_once()
         self.assertEqual(status_callback.call_args.args[0], 'analysis_completed')
 
+    def test_disabled_indicator_import_keeps_iocs_in_comments_only(self):
+        defender_client = Mock()
+        defender_client.get_indicator_action.return_value = 'Disabled'
+        connector = Mock()
+        connector.run_file_analysis.return_value = 'task-uuid'
+        connector.get_analysis_report.side_effect = [
+            self.report(),
+            [{'type': 'domain', 'ioc': 'example.test', 'reputation': 2}],
+        ]
+        module = load_processor(defender_client)
+
+        result = module.process_analysis(
+            analysis_type='file', alert_id='alert-1', connector=connector,
+            analysis_options={'opt_timeout': 240}, ms_defender=defender_client,
+            file=b'sample', filename='sample.exe',
+        )
+
+        defender_client.submit_indicators.assert_not_called()
+        defender_client.add_ioc_comment.assert_called_once()
+        self.assertFalse(defender_client.add_summary_comment.call_args.kwargs['indicators_imported'])
+        self.assertEqual(result['indicators_count'], 1)
+        self.assertEqual(result['rejected_indicators_count'], 0)
+        self.assertTrue(result['indicator_import_disabled'])
+        self.assertTrue(result['enriched'])
+
 
 if __name__ == '__main__':
     unittest.main()

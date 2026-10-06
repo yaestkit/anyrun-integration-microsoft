@@ -81,7 +81,8 @@ class ArmTemplateTests(unittest.TestCase):
             resource for resource in self.template['resources']
             if resource['type'] == 'Microsoft.Web/sites/extensions'
         )
-        package_uri = extension['properties']['packageUri']
+        self.assertEqual(extension['properties']['packageUri'], "[parameters('packageUri')]")
+        package_uri = self.template['parameters']['packageUri']['defaultValue']
         self.assertTrue(package_uri.startswith('https://raw.githubusercontent.com/'))
         self.assertIn('/yaestkit/anyrun-integration-microsoft/', package_uri)
         self.assertIn('/refs/heads/asyncv2/', package_uri)

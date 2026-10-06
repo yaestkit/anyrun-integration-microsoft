@@ -28,6 +28,7 @@ from .utils import (
 
 
 LIVE_RESPONSE_PAYLOAD_VERSION = 'v2'
+INDICATOR_ACTIONS = ('Audit', 'Block', 'Disabled')
 
 
 def batched(iterable, size):
@@ -419,7 +420,8 @@ class MicrosoftDefender:
         alert_id: str,
         evidence: str,
         analysis_verdict: str,
-        report: dict
+        report: dict,
+        indicators_imported: bool = True,
     ) -> None:
         """
         Adds summary comment to alert
@@ -446,7 +448,8 @@ class MicrosoftDefender:
             evidence,
             analysis_verdict,
             score,
-            task_url
+            task_url,
+            indicators_imported=indicators_imported,
         )
 
         self.add_comment(alert_id, comment)
@@ -710,6 +713,18 @@ class MicrosoftDefender:
 
             time.sleep(self._config.ACTION_TIMEOUT)
 
+    def get_indicator_action(self) -> str:
+        """
+        Returns the configured Defender action for Sandbox IOCs.
+
+        Audit and Block import indicators with alerts. Disabled keeps IOCs only
+        in alert comments and the ANY.RUN report.
+        """
+        indicator_action = get_env_variable('DefenderIndicatorAction', default='Audit')
+        if indicator_action not in INDICATOR_ACTIONS:
+            raise ValueError('DefenderIndicatorAction must be Audit, Block or Disabled.')
+        return indicator_action
+
     def submit_indicators(self, indicators: list[dict], task_uuid: str) -> list[dict]:
         """
         Loads Malicious and Suspicious IOCs to the MS Defender
@@ -718,12 +733,9 @@ class MicrosoftDefender:
         :param task_uuid: Analysis uuid
         """
         url = f'{self._config.DEFENDER_API_BASE_URL}/api/indicators/import'
-        indicator_action = get_env_variable('DefenderIndicatorAction', default='Audit')
-        if indicator_action not in {'Audit', 'Block'}:
-            raise ValueError('DefenderIndicatorAction must be Audit or Block.')
-        generate_alert = str(
-            get_env_variable('DefenderIndicatorGenerateAlert', default='false')
-        ).casefold() == 'true'
+        indicator_action = self.get_indicator_action()
+        if indicator_action == 'Disabled':
+            raise ValueError('Indicator import into Microsoft Defender is disabled.')
 
         payload = {
             'Indicators': [
@@ -732,7 +744,7 @@ class MicrosoftDefender:
                     'title': 'IoC from ANY.RUN Sandbox',
                     'description': f'https://app.any.run/tasks/{task_uuid}',
                     'action': indicator_action,
-                    'generateAlert': generate_alert,
+                    'generateAlert': True,
                     'severity': {
                         1: 'Medium',
                         2: 'High'

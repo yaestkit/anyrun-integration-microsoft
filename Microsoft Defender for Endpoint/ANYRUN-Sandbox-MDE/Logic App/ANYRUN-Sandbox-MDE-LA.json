@@ -33,10 +33,10 @@
         },
         "analysisPrivacyType": {
             "type": "string",
-            "defaultValue": "owner",
+            "defaultValue": "bylink",
             "allowedValues": [
-                "owner",
-                "bylink"
+                "bylink",
+                "owner"
             ],
             "metadata": {
                 "description": "ANY.RUN analysis visibility. The owner option requires a plan that supports private tasks."

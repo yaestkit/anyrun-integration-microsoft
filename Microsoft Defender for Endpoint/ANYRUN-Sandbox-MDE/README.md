@@ -12,7 +12,7 @@ ______________________________________________________________________
 
 This connector integrates Microsoft Defender for Endpoint (MDE) with the [ANY.RUN Sandbox](https://any.run/features/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=ms_defender_tifeeds&utm_content=linktosandboxlanding) to enrich MDE alerts through automated malware analysis. It triggers automatically upon the registration of a new alert in MDE, extracting and analyzing entities such as URLs or files associated with the alert.
 
-The enrichment process adds valuable context directly to the alert: comments include the ANY.RUN verdict, threat score, a link to the detailed analysis report, and any Indicators of Compromise (IOCs) discovered during the sandbox detonation. Extracted IoCs are also imported into MDE's local Threat Intelligence lists for enhanced detection and response.
+The enrichment process adds valuable context directly to the alert: comments include the ANY.RUN verdict, threat score, a link to the detailed analysis report, and any Indicators of Compromise (IOCs) discovered during the sandbox detonation. Extracted IoCs are also imported into MDE's local Threat Intelligence lists for enhanced detection and response, unless indicator import is set to `Disabled`.
 
 This connector empowers SOC teams with deeper insights into potential threats, accelerating triage, reducing false positives, and enabling proactive hunting — all while leveraging ANY.RUN's interactive sandbox capabilities for real-time behavioral analysis.
 
@@ -217,10 +217,9 @@ A separate `Machine.Read.All` permission is unnecessary when
 | AzureStorageAccountName      | Azure Blob Storage Account Name.                                            |
 | AzureStorageAccountKey       | Azure Blob Storage Account Key.                                             |
 | AzureStorageConnectionString | Azure Blob Storage Account Connection string.                               |
-| AzureBlobContainerName       | Azure Blob Storage Container Name.                                          |
+| AzureBlobContainerName       | Azure Blob Storage Container Name. Default: `anyrun-quarantine`.           |
 | ANYRUN_API_KEY               | API Key of your ANY.RUN Account.                                            |
-| DefenderIndicatorAction      | `Audit` (default) or `Block` for malicious/suspicious indicators.           |
-| DefenderIndicatorGenerateAlert | Generate a Defender alert on IOC match; disabled by default.              |
+| DefenderIndicatorAction      | `Audit` (default; alert on match), `Block`, or `Disabled` (do not import IOCs into Defender; they stay in alert comments). Imported indicators always generate alerts, as Microsoft requires for `Audit`. |
 | ConfigureEvidenceLifecyclePolicy | Delete evidence after one day and job status after seven days. Enable only for a dedicated Storage Account. |
 | LogAnalyticsWorkspaceName    | Log Analytics Workspace Name.                                               |
 
@@ -301,10 +300,9 @@ Account: Azure stores one lifecycle-policy document per account, so replacing
 it could affect unrelated rules. The automated installer enables these rules
 only when it created a dedicated Sandbox Storage Account.
 
-The `analysisPrivacyType` Logic App parameter defaults to `owner`. Private tasks
-require a compatible ANY.RUN plan; select `bylink` during deployment if the
-account does not support `owner`. A by-link analysis is accessible to anyone
-who obtains its link and should be an explicit organizational decision.
+The `analysisPrivacyType` Logic App parameter defaults to `bylink`. Select
+`owner` during deployment for private tasks; this requires an ANY.RUN plan that
+supports them.
 
 ### Deploy Azure Logic App
 
@@ -325,7 +323,7 @@ who obtains its link and should be an explicit organizational decision.
 | azureClientId                   | Azure Client ID for authentication (ID of the App Registration created before). |
 | azureClientSecret               | Azure Client Secret for authentication.                                     |
 | functionAppName                 | Name of the Function App deplyed before.                                    |
-| analysisPrivacyType             | `owner` (default, private-plan support required) or `bylink`.                |
+| analysisPrivacyType             | `bylink` (default) or `owner` (private-plan support required).              |
 
 
 ## Microsoft Defender for Endpoint Configuration

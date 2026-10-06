@@ -6,6 +6,27 @@
       "type": "string",
       "defaultValue": "ANYRUN-Sandbox-MDE-FA"
     },
+    "hostingPlanName": {
+      "type": "string",
+      "defaultValue": "[parameters('functionAppName')]",
+      "metadata": {
+        "description": "Flex Consumption plan name. Defaults to the Function App name."
+      }
+    },
+    "appInsightsName": {
+      "type": "string",
+      "defaultValue": "[parameters('functionAppName')]",
+      "metadata": {
+        "description": "Application Insights name. Defaults to the Function App name."
+      }
+    },
+    "packageUri": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip",
+      "metadata": {
+        "description": "HTTPS URI of the Function App ZIP package."
+      }
+    },
     "AzureTenantID": {
       "type": "string",
       "metadata": {
@@ -44,6 +65,7 @@
     },
     "AzureBlobContainerName": {
       "type": "string",
+      "defaultValue": "anyrun-quarantine",
       "metadata": {
         "description": "Azure Blob Storage Container Name."
       }
@@ -59,17 +81,11 @@
       "defaultValue": "Audit",
       "allowedValues": [
         "Audit",
-        "Block"
+        "Block",
+        "Disabled"
       ],
       "metadata": {
-        "description": "Action for indicators imported from ANY.RUN Sandbox."
-      }
-    },
-    "DefenderIndicatorGenerateAlert": {
-      "type": "bool",
-      "defaultValue": false,
-      "metadata": {
-        "description": "Generate a Defender alert when an imported Sandbox indicator matches."
+        "description": "Defender action for IOCs found by ANY.RUN Sandbox: Audit (alert on match), Block, or Disabled (do not import IOCs; they stay in alert comments)."
       }
     },
     "ConfigureEvidenceLifecyclePolicy": {
@@ -89,13 +105,13 @@
   "variables": {
     "deploymentStorageContainerName": "anyrundeploymentcontainer",
     "jobStatusContainerName": "anyrun-job-status",
-    "storageRoleDefinitionId": "b7e6dc6d-f1e8-4753-8033-0f276bb0955b"
+    "storageRoleDefinitionId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
   },
   "resources": [
     {
       "type": "Microsoft.Insights/components",
       "apiVersion": "2020-02-02",
-      "name": "[parameters('functionAppName')]",
+      "name": "[parameters('appInsightsName')]",
       "location": "[resourceGroup().location]",
       "kind": "web",
       "properties": {
@@ -225,7 +241,7 @@
     {
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2023-12-01",
-      "name": "[parameters('functionAppName')]",
+      "name": "[parameters('hostingPlanName')]",
       "location": "[resourceGroup().location]",
       "kind": "functionapp",
       "sku": {
@@ -247,7 +263,7 @@
       },
       "properties": {
         "httpsOnly": true,
-        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('functionAppName'))]",
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('hostingPlanName'))]",
         "functionAppConfig": {
           "deployment": {
             "storage": {
@@ -280,16 +296,12 @@
               "value": "[parameters('DefenderIndicatorAction')]"
             },
             {
-              "name": "DefenderIndicatorGenerateAlert",
-              "value": "[string(parameters('DefenderIndicatorGenerateAlert'))]"
-            },
-            {
               "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
-              "value": "[reference(resourceId('Microsoft.insights/components', parameters('functionAppName')), '2020-02-02').InstrumentationKey]"
+              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').InstrumentationKey]"
             },
             {
               "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
-              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('functionAppName')), '2020-02-02').ConnectionString]"
+              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
             },
             {
               "name": "AzureWebJobsStorage",
@@ -331,9 +343,9 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/serverfarms', parameters('functionAppName'))]",
+        "[resourceId('Microsoft.Web/serverfarms', parameters('hostingPlanName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts', parameters('AzureStorageAccountName'))]",
-        "[resourceId('Microsoft.Insights/components', parameters('functionAppName'))]"
+        "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]"
       ]
     },
     {
@@ -420,7 +432,7 @@
         "[resourceId('Microsoft.Resources/deployments', 'AssignFunctionStorageRole')]"
       ],
       "properties": {
-        "packageUri": "https://raw.githubusercontent.com/yaestkit/anyrun-integration-microsoft/refs/heads/asyncv2/Microsoft%20Defender%20for%20Endpoint/ANYRUN-Sandbox-MDE/Function%20App/ANYRUN-Sandbox-MDE-FA.zip",
+        "packageUri": "[parameters('packageUri')]",
         "remoteBuild": true
       }
     },

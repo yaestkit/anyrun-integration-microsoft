@@ -9,7 +9,7 @@ $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw ($errors.Message -join "`n") }
 $wanted = @('Get-StableSuffix','Get-AzureAppNameHash','Get-ConnectorDefaultNames','Select-ExistingResourceName',
-  'Set-FunctionSupportingResourceNames','Assert-FunctionName','Assert-LogicAppName')
+  'Assert-FunctionName','Assert-LogicAppName')
 foreach ($node in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
   if ($node.Name -in $wanted) { Invoke-Expression $node.Extent.Text }
 }
@@ -137,22 +137,23 @@ $script:armState='Succeeded'; $script:armHash='bad'
 Assert-Throws { Get-AzureAppNameHash -ResourceGroupName ANYRUN-MDE-RG -InstanceName demo01 } 'Do not proceed after invalid ARM output'
 $script:armHash='abcdef'
 
-$functionTemplatePath=Join-Path $root 'ANYRUN-Sandbox-MDE/Function App/ANYRUN-Sandbox-MDE-FA.json'
-$raw=Get-Content $functionTemplatePath -Raw | ConvertFrom-Json
-$named=Set-FunctionSupportingResourceNames -Template $raw -BaseName 'ANYRUN-Sandbox-MDE-demo01' -FunctionAppName $sandbox.SandboxFunctionName
-Assert-Equal $named.variables.hostingPlanName 'ANYRUN-Sandbox-MDE-demo01-Plan' 'Hosting-plan name'
-Assert-Equal $named.variables.appInsightsName 'ANYRUN-Sandbox-MDE-demo01-AI' 'Insights name'
-$site=@($named.resources | Where-Object type -eq 'Microsoft.Web/sites')[0]
-Assert-Equal $site.name "[parameters('functionAppName')]" 'Function reference remains unchanged'
-Assert-Equal $site.properties.serverFarmId "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]" 'Function references the renamed plan'
-$namedText=$named|ConvertTo-Json -Depth 100
-Assert-True ($namedText -notmatch "resourceId\('Microsoft.Insights/components', parameters\('functionAppName'\)\)") 'Both Insights settings and dependencies reference new name'
+foreach ($functionTemplatePath in @((Join-Path $root 'ANYRUN-Sandbox-MDE/Function App/ANYRUN-Sandbox-MDE-FA.json'),
+                                    (Join-Path $root 'ANYRUN-TI-Feeds-MDE/Function App/ANYRUN-Feeds-MDE-FA.json'))) {
+  $raw=Get-Content $functionTemplatePath -Raw | ConvertFrom-Json
+  $plan=@($raw.resources | Where-Object type -eq 'Microsoft.Web/serverfarms')[0]
+  $insights=@($raw.resources | Where-Object type -eq 'Microsoft.Insights/components')[0]
+  $site=@($raw.resources | Where-Object type -eq 'Microsoft.Web/sites')[0]
+  Assert-Equal $plan.name "[parameters('hostingPlanName')]" 'Hosting-plan name is a template parameter'
+  Assert-Equal $insights.name "[parameters('appInsightsName')]" 'Insights name is a template parameter'
+  Assert-Equal $site.name "[parameters('functionAppName')]" 'Function reference remains unchanged'
+  Assert-Equal $site.properties.serverFarmId "[resourceId('Microsoft.Web/serverfarms', parameters('hostingPlanName'))]" 'Function references the named plan'
+  Assert-Equal $raw.parameters.hostingPlanName.defaultValue "[parameters('functionAppName')]" 'Original installer names stay the default'
+  $rawText=Get-Content $functionTemplatePath -Raw
+  Assert-True ($rawText -notmatch "resourceId\('Microsoft.Insights/components', parameters\('functionAppName'\)\)") 'Insights settings and dependencies use the parameter'
+}
 $oldPlan=[pscustomobject]@{ResourceType='Microsoft.Web/serverfarms';Name=$sandbox.SandboxFunctionName}
-$oldInsights=[pscustomobject]@{ResourceType='Microsoft.Insights/components';Name=$sandbox.SandboxFunctionName}
-$raw=Get-Content $functionTemplatePath -Raw | ConvertFrom-Json
-$kept=Set-FunctionSupportingResourceNames -Template $raw -BaseName 'ANYRUN-Sandbox-MDE-demo01' -FunctionAppName $sandbox.SandboxFunctionName -Resources @($oldPlan,$oldInsights)
-Assert-Equal $kept.variables.hostingPlanName $oldPlan.Name 'Reuse original hosting plan'
-Assert-Equal $kept.variables.appInsightsName $oldInsights.Name 'Reuse original Insights'
+Assert-Equal (Select-ExistingResourceName -PreferredName 'ANYRUN-Sandbox-MDE-demo01-Plan' -ResourceType 'Microsoft.Web/serverfarms' -PreviousNames @($sandbox.SandboxFunctionName) -Resources @($oldPlan)) $oldPlan.Name 'Reuse original hosting plan'
+Assert-Equal (Select-ExistingResourceName -PreferredName 'ANYRUN-Sandbox-MDE-demo01-Plan' -ResourceType 'Microsoft.Web/serverfarms' -PreviousNames @($sandbox.SandboxFunctionName) -Resources @()) 'ANYRUN-Sandbox-MDE-demo01-Plan' 'New plan name for new instance'
 Write-Host "PASS: $script:checks offline naming checks; PowerShell parser; no live Azure calls."
 
 if ($ExportFixtures) {
