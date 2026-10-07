@@ -47,7 +47,7 @@
     "anyrunApiKey": {
       "type": "securestring",
       "metadata": {
-        "description": "ANY.RUN API key (without the 'API-KEY ' prefix)."
+        "description": "ANY.RUN Sandbox API key."
       }
     },
     "analysisPrivacyType": {
@@ -337,7 +337,7 @@
           "appSettings": [
             {
               "name": "ANYRUN_API_KEY",
-              "value": "[concat('API-KEY ', parameters('anyrunApiKey'))]"
+              "value": "[parameters('anyrunApiKey')]"
             },
             {
               "name": "DefenderIndicatorAction",

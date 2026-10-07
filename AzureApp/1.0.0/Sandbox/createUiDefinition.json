@@ -187,7 +187,7 @@
               "password": "ANY.RUN API key",
               "confirmPassword": "Confirm API key"
             },
-            "toolTip": "ANY.RUN API key without the 'API-KEY' prefix.",
+            "toolTip": "ANY.RUN Sandbox API key from your ANY.RUN account.",
             "constraints": {
               "required": true,
               "regex": "^.{12,}$",
