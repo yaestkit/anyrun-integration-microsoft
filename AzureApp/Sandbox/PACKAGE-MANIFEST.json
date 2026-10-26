@@ -1,0 +1,31 @@
+{
+  "upstreamRepository": "badger-anyrun-integrations/anyrun-integration-microsoft",
+  "upstreamBranch": "feat/add-us-servers",
+  "upstreamCommit": "8963f0bd5b218c358e4a245021151bb1423b6ab4",
+  "toolingArchiveCommit": "c3448c3d2e6d60c51b3a94daa4f55482ee85b36d",
+  "testRepository": "yaestkit/anyrun-integration-microsoft",
+  "testBranch": "feat/add-us-servers",
+  "functionPackageSha256": "676905e63723347509647798cb81b71f08bd863a4085fc168450247aacad1adb",
+  "functionPackageUnmodified": true,
+  "functionPackageMatchesSource": true,
+  "templateAdjustment": "Only functionPackageUri filename changed to artifacts/released-package.zip for Flex Consumption OneDeploy.",
+  "files": {
+    "AzureApp/Sandbox/mainTemplate.json": "4a38566cdd8a2068a6bf1348043481eef13ad97d141295703a7664cb190665a6",
+    "AzureApp/Sandbox/createUiDefinition.json": "9aa11ebc8c8b39bef0fac4e9a089ab6770ea88901a8d6ac5459ff2a080526d65",
+    "AzureApp/Sandbox/artifacts/released-package.zip": "676905e63723347509647798cb81b71f08bd863a4085fc168450247aacad1adb",
+    "Microsoft Defender for Endpoint/ANYRUN-Sandbox-MDE/Function App/ANYRUN-Sandbox-MDE-FA.zip": "676905e63723347509647798cb81b71f08bd863a4085fc168450247aacad1adb"
+  },
+  "validation": {
+    "armTtkPassed": 49,
+    "armTtkFailed": 0,
+    "zipIntegrity": "passed",
+    "packageSourceEquality": "passed",
+    "uiTemplateParameterMapping": "passed",
+    "azureDeployment": "not run",
+    "liveEndToEnd": "not run",
+    "pythonVersion": "3.12.14",
+    "pythonSyntaxFilesPassed": 14,
+    "functionEntrypointsPassed": 3
+  },
+  "publicationStatus": "Local source bundle only; not pushed to GitHub."
+}

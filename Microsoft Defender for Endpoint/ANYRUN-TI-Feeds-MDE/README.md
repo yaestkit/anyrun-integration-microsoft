@@ -32,15 +32,32 @@ Connect TI Feeds with MDE for an easy access to all the benefits it brings:
 - Microsoft Defender for Endpoint
 - [ANY.RUN TI Feeds subscription](https://intelligence.any.run/plans/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=ms_defender_tifeeds&utm_content=linktotiplans) and ANY.RUN’s API key (without a prefix). To obtain one, [reach out to our sales team](https://any.run/enterprise/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=microsoftdefender&utm_content=linktoenterprise#contact-sales).
 - Microsoft Azure resources:
-  - Logic App with Flex Consumption plan
+  - Logic App (Consumption)
   - Function App Flex Consumption plan
 
 Note:
 Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in future releases. 
 
-## Prerequisites
+The connector can be installed automatically using the [PowerShell installer](https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/Scripts), or manually. For details, see [Installation](#installation) below.
 
-### App Registration
+## Installation
+
+### Automated installation (recommended)
+
+An automated PowerShell installer is available. It runs in Azure Cloud Shell,
+creates the App Registration, grants the Defender permissions, and deploys the
+Function App and Logic App for the TI Feeds connector.
+
+To use it, follow the [installer guide](https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/Scripts) and choose
+**Feeds** when the installer asks for the connector.
+
+### Manual installation
+
+If you want to install everything manually, follow the instructions below:
+complete the steps in this section, then continue with
+[Manual Deployment](#manual-deployment).
+
+#### App Registration
 
 - You need to create a new application for your connector. To do this, go to **Microsoft Entra ID**.
 
@@ -54,7 +71,7 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 
 ![register_app](images/001.png)
 
-### Secret Value of created App
+#### Secret Value of created App
 
 - To generate the Client Secret, go to your application's page and click **Generate Secret** in the **Certificates & secrets** tab.
 
@@ -68,7 +85,7 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 
 ![save_secret](images/007.png)
 
-### Microsoft Defender ATP API Permissions for new App
+#### Microsoft Defender ATP API Permissions for new App
 
 - For the created application, add the following permissions for API connections in the **Manage** > **API permissions** > **Add a permission** tab:
 
@@ -84,19 +101,19 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 
 - Select the following permissions:
 
-|       Category       |   Permission Name   | Description                                                            |
-|----------------------|---------------------|------------------------------------------------------------------------|
-| Ti                   | Ti.Read.All         | Needed to retrieve indicators                                          |
-| Ti                   | Ti.ReadWrite        | Needed to retrieve and submit indicators (application specific)        |
-| Ti                   | Ti.ReadWrite.All    | Needed to retrieve and submit indicators (general)                     |
+| Category | Permission Name | Description                                                     |
+|----------|-----------------|-----------------------------------------------------------------|
+| Ti       | Ti.ReadWrite    | Retrieve and manage indicators created by this application.     |
+| Ti       | Ti.Read.All     | Needed to retrieve indicators.                                  |
 
-## Deployment
+
+## Manual Deployment
 
 ### Deploy Azure Function App
 
 - Click below to deploy Azure Function App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FFunction%2520App%2FANYRUN-Feeds-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FFunction%2520App%2FANYRUN-Feeds-MDE-FA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 
@@ -120,7 +137,7 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 
 - Click below to deploy Azure Logic App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FLogic%2520App%2FANYRUN-Feeds-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-TI-Feeds-MDE%2FLogic%2520App%2FANYRUN-Feeds-MDE-LA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 
@@ -133,7 +150,7 @@ Prefixed API keys and Basic Authentication for TI Feeds won’t be supported in 
 | logicAppName                    | Workflow name.                                                              |
 | intervalRecurrence              | Interval of recurrence for the logic app (in hours).                        |
 | feedFetchDepth                  | Depth of the feed to fetch (in days).                                       |
-| minimumConfidenceThreshold      | Minimum STIX confidence threshold, from 1 to 100 (default: 50).             |
+| minimum_confidence_threshold    | Minimum STIX confidence threshold, from 1 to 100 (default: 50).             |
 | functionAppName                 | Name of the Function App deployed before.                                   |
 
 ## Logic App Configuration (Optional)
@@ -152,17 +169,16 @@ You can change the recurrence interval at which the Logic App will run and updat
 
 You can change the fetch depth of indicators in ANY.RUN TI Feeds. This parameter determines the period for which to extract data from ANY.RUN TI Feeds.
 
-- Open your Logic App **ANYRUN-Feeds-MDE-LA**, navigate to **Development tools** > **Logic app designer**.
+- Open your Logic App ANYRUN-Feeds-MDE-LA, navigate to **Development tools** > **Logic app designer**.
 
 - Select the `Initialize variables` action and specify the required value in days in the `feed_fetch_depth` variable.
 
+![feed_fetch_depth](images/013.png)
 
-### Minimum Confidence Threshold
+### Minimum Indicator Confidence
 
 The connector filters every newly downloaded batch before importing it into Microsoft Defender for Endpoint. Only indicators whose STIX `confidence` value is greater than or equal to the Logic App's `minimum_confidence_threshold` variable are imported. The default value is `50`; adjust it when you are ready to evaluate indicators with a different confidence level.
 
 - Open your Logic App **ANYRUN-Feeds-MDE-LA**, navigate to **Development tools** > **Logic app designer**.
-
 - Open the `Initialize variables` action and change the value of `minimum_confidence_threshold` to an integer from `1` to `100`.
-
-![feed_fetch_depth](images/013.png)
+- Save the Logic App. The new threshold applies to the next downloaded feed batch without redeploying the workflow.

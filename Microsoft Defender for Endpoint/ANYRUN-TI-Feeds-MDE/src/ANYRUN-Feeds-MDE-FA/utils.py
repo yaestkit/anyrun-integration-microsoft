@@ -1,9 +1,26 @@
+from __future__ import annotations
+
 import os
+import re
 
 
-DEFAULT_MINIMUM_CONFIDENCE_THRESHOLD = 50
-MINIMUM_CONFIDENCE_THRESHOLD_MIN = 1
-MINIMUM_CONFIDENCE_THRESHOLD_MAX = 100
+MIN_CONFIDENCE_THRESHOLD = 1
+MAX_CONFIDENCE_THRESHOLD = 100
+
+STIX_PATTERN = re.compile(
+    r"^\[(?P<object_type>[a-z0-9-]+):(?P<property>[^ ]+) = '(?P<value>(?:\\.|[^'])*)'\]$",
+    re.IGNORECASE,
+)
+
+DEFENDER_INDICATOR_TYPES = {
+    ('ipv4-addr', 'value'): 'IpAddress',
+    ('domain-name', 'value'): 'DomainName',
+    ('url', 'value'): 'Url',
+    ('file', 'hashes.md5'): 'FileMd5',
+    ('file', 'hashes.sha-1'): 'FileSha1',
+    ('file', 'hashes.sha-256'): 'FileSha256',
+    ('x509-certificate', 'hashes.sha-1'): 'CertificateThumbprint',
+}
 
 
 def get_env_variable(name: str, default: str | None = None) -> str:
@@ -27,27 +44,21 @@ def get_env_variable(name: str, default: str | None = None) -> str:
 
 def validate_minimum_confidence_threshold(value: int | str) -> int:
     """Validate and normalize the inclusive confidence threshold."""
-    error_message = 'minimum_confidence_threshold must be an integer from 1 to 100.'
-
-    if isinstance(value, bool) or not isinstance(value, (int, str)):
-        raise ValueError(error_message)
+    if isinstance(value, bool):
+        raise ValueError('minimum_confidence_threshold must be an integer from 1 to 100.')
 
     try:
         minimum_confidence_threshold = int(value)
     except (TypeError, ValueError) as error:
-        raise ValueError(error_message) from error
+        raise ValueError('minimum_confidence_threshold must be an integer from 1 to 100.') from error
 
-    if not (
-        MINIMUM_CONFIDENCE_THRESHOLD_MIN
-        <= minimum_confidence_threshold
-        <= MINIMUM_CONFIDENCE_THRESHOLD_MAX
-    ):
-        raise ValueError(error_message)
+    if not MIN_CONFIDENCE_THRESHOLD <= minimum_confidence_threshold <= MAX_CONFIDENCE_THRESHOLD:
+        raise ValueError('minimum_confidence_threshold must be an integer from 1 to 100.')
 
     return minimum_confidence_threshold
 
 
-def filter_indicators_by_minimum_confidence_threshold(
+def filter_indicators_by_confidence(
     indicators: list[dict],
     minimum_confidence_threshold: int,
 ) -> tuple[list[dict], int, int]:
@@ -58,9 +69,7 @@ def filter_indicators_by_minimum_confidence_threshold(
     values are excluded. Returns selected indicators and counts of indicators
     excluded for low and invalid confidence respectively.
     """
-    minimum_confidence_threshold = validate_minimum_confidence_threshold(
-        minimum_confidence_threshold,
-    )
+    minimum_confidence_threshold = validate_minimum_confidence_threshold(minimum_confidence_threshold)
     selected = []
     below_threshold = 0
     invalid_confidence = 0
@@ -70,8 +79,8 @@ def filter_indicators_by_minimum_confidence_threshold(
 
         if (
             isinstance(confidence, bool)
-            or not isinstance(confidence, int)
-            or not 0 <= confidence <= MINIMUM_CONFIDENCE_THRESHOLD_MAX
+            or not isinstance(confidence, (int, float))
+            or not 0 <= confidence <= MAX_CONFIDENCE_THRESHOLD
         ):
             invalid_confidence += 1
             continue
@@ -85,16 +94,28 @@ def filter_indicators_by_minimum_confidence_threshold(
     return selected, below_threshold, invalid_confidence
 
 
-def extract_indicator_data(pattern: str) -> tuple[str, str]:
+def extract_indicator_data(pattern: str) -> tuple[str, str] | None:
     """
     Extracts indicator type, value using raw indicator
 
     :param pattern: STIX pattern
-    :return: ANY.RUN indicator type, ANY.RUN indicator value
+    :return: Microsoft Defender indicator type and value, or None when the
+        STIX pattern cannot be represented by the Defender Indicators API.
     """
-    indicator_type = pattern.split(":")[0][1:]
-    indicator_value = pattern.split(" = '")[1][:-2]
+    if not isinstance(pattern, str):
+        return None
 
+    match = STIX_PATTERN.fullmatch(pattern.strip())
+    if not match:
+        return None
+
+    object_type = match.group('object_type').lower()
+    property_name = match.group('property').replace("'", '').lower()
+    indicator_type = DEFENDER_INDICATOR_TYPES.get((object_type, property_name))
+    if not indicator_type:
+        return None
+
+    indicator_value = match.group('value').replace("\\'", "'").replace('\\\\', '\\')
     return indicator_type, indicator_value
 
 
@@ -112,4 +133,5 @@ def get_severity(confidence: int) -> str:
 def get_description(external_references: list[dict[str, str]]) -> str:
     if not external_references:
         return 'No description'
-    return ','.join(reference.get('url') for reference in external_references[:9])
+    urls = [reference.get('url') for reference in external_references[:9] if reference.get('url')]
+    return ','.join(urls) or 'No description'

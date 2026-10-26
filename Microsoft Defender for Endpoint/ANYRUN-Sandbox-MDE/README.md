@@ -20,15 +20,32 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 - Microsoft Defender for Endpoint
 - ANY.RUN API Key. To obtain it, please contact your [ANY.RUN account manager](https://app.any.run/contact-us/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=ms_defender_sandbox&utm_content=linktocontactus) directly or fill out [the request form](https://any.run/demo/?utm_source=anyrungithub&utm_medium=documentation&utm_campaign=ms_defender_sandbox&utm_content=linktodemo).
 - Microsoft Azure resources:
-  - Logic App with Flex Consumption plan
+  - Logic App Consumption plan
   - Function App Flex Consumption plan
   - Blob Storage
 
+The connector can be installed automatically using the [PowerShell installer](https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/Scripts), or manually. For details, see [Installation](#installation) below.
+
 ## Solution Overview
 
-## Prerequisites
+## Installation
 
-### App Registration
+### Automated installation (recommended)
+
+An automated PowerShell installer is available. It runs in Azure Cloud Shell,
+creates the App Registration, grants the Defender permissions, and deploys the
+Function App and Logic App for the Sandbox connector.
+
+To use it, follow the [installer guide](https://github.com/anyrun/anyrun-integration-microsoft/tree/main/Microsoft%20Defender%20for%20Endpoint/Scripts) and choose
+**Sandbox** when the installer asks for the connector.
+
+### Manual installation
+
+If you want to install everything manually, follow the instructions below:
+complete the steps in this section, then continue with
+[Manual Deployment](#manual-deployment).
+
+#### App Registration
 
 - You need to create a new application for your connector. To do this, go to **Microsoft Entra ID**.
 
@@ -42,7 +59,7 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 
 ![register_app](images/005.png)
 
-### Secret Value of created App
+#### Secret Value of created App
 
 - To generate the Client Secret, go to your application's page and click **Generate Secret** in the **Certificates & secrets** tab.
 
@@ -56,7 +73,7 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 
 ![save_secret](images/044.png)
 
-### Microsoft Defender ATP API Permissions for new App
+#### Microsoft Defender ATP API Permissions for new App
 
 - For the created application, add the following permissions for API connections in the **Manage** > **API permissions** > **Add a permission** tab:
 
@@ -74,16 +91,14 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 
 |       Category       |   Permission Name   | Description                                                            |
 |----------------------|---------------------|------------------------------------------------------------------------|
-| Alert                | Alert.Read.All      | Needed to retrieve alerts and related evidence                         |
 | Alert                | Alert.ReadWrite.All | Needed to enrich alerts with sample information                        |
-| Machine              | Machine.LiveResponse | Needed to gather evidences from machines                               |
-| Machine              | Machine.Read.All    | Needed to retrieve information about machines                          |
-| Ti                   | Ti.Read.All         | Needed to retrieve indicators                                          |
-| Ti                   | Ti.ReadWrite        | Needed to retrieve and submit indicators (application specific)        |
-| Ti                   | Ti.ReadWrite.All    | Needed to retrieve and submit indicators (general)                     |
+| Machine              | Machine.LiveResponse | Starts and cancels Live Response actions                              |
+| Machine              | Machine.ReadWrite.All | Reads machine information and MachineAction objects; downloads Live Response results |
+| Ti                   | Ti.Read.All         | Needed to retrieve indicators |
+| Ti                   | Ti.ReadWrite        | Submits indicators found by ANY.RUN                                  |
 | Library              | Library.Manage      | Needed to upload custom ps1 script for retrieving AV related evidences |
 
-### Storage Account
+#### Storage Account
 
 - Go to Azure Storage Accounts.
 
@@ -109,13 +124,18 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 
 ![sa_key](images/013.png)
  
-## Deployment
+## Manual Deployment
+
+The deploying account needs `Microsoft.Authorization/roleAssignments/write` on
+the Storage Account (for example, **Owner** or **User Access Administrator**):
+the template grants the Function App managed identity
+**Storage Blob Data Contributor** on it.
 
 ### Deploy Azure Function App
 
 - Click below to deploy Azure Function App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FFunction%2520App%2FANYRUN-Sandbox-MDE-FA.json)
 
 - Enter the parameters required for deploying the Function App and click **Review + create**.
 
@@ -132,15 +152,18 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 | AzureStorageAccountName      | Azure Blob Storage Account Name.                                            |
 | AzureStorageAccountKey       | Azure Blob Storage Account Key.                                             |
 | AzureStorageConnectionString | Azure Blob Storage Account Connection string.                               |
-| AzureBlobContainerName       | Azure Blob Storage Container Name.                                          |
+| AzureBlobContainerName       | Azure Blob Storage Container Name. Default: `anyrun-quarantine`.           |
 | ANYRUN_API_KEY               | API Key of your ANY.RUN Account.                                            |
+| ANYRUN_BASE_DOMAIN           | The base domain for the ANY.RUN connection. By default, the domain is `any.run`.            |
+| DefenderIndicatorAction      | `Audit` (default; alert on match), `Block`, or `Disabled` (do not import IOCs into Defender; they stay in alert comments). |
+| ConfigureEvidenceLifecyclePolicy | Delete evidence after one day and job status after seven days. Enable only for a dedicated Storage Account. |
 | LogAnalyticsWorkspaceName    | Log Analytics Workspace Name.                                               |
 
 ### Deploy Azure Logic App
 
 - Click below to deploy Azure Logic App with **Flex Consumption plan**
  
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fanyrun%2Fanyrun-integration-microsoft%2Frefs%2Fheads%2Fmain%2FMicrosoft%2520Defender%2520for%2520Endpoint%2FANYRUN-Sandbox-MDE%2FLogic%2520App%2FANYRUN-Sandbox-MDE-LA.json)
 
 - Enter the parameters required for deploying the Logic App and click **Review + create**.
 
@@ -155,6 +178,7 @@ This connector empowers SOC teams with deeper insights into potential threats, a
 | azureClientId                   | Azure Client ID for authentication (ID of the App Registration created before). |
 | azureClientSecret               | Azure Client Secret for authentication.                                     |
 | functionAppName                 | Name of the Function App deplyed before.                                    |
+| analysisPrivacyType             | `bylink` (default) or `owner`.              |
 
 
 ## Microsoft Defender for Endpoint Configuration
