@@ -1,0 +1,34 @@
+{
+  "upstreamRepository": "badger-anyrun-integrations/anyrun-integration-microsoft",
+  "upstreamBranch": "feat/add-us-servers",
+  "upstreamCommit": "8963f0bd5b218c358e4a245021151bb1423b6ab4",
+  "toolingArchiveCommit": "c3448c3d2e6d60c51b3a94daa4f55482ee85b36d",
+  "testRepository": "yaestkit/anyrun-integration-microsoft",
+  "testBranch": "feat/add-us-servers",
+  "functionPackageSha256": "c86c02bce7a1500d47538b555843fee2319344b3e8f4944d7279b94b71bb38a7",
+  "functionPackageUnmodified": false,
+  "functionPackageMatchesSource": true,
+  "templateAdjustment": "functionPackageUri filename changed to artifacts/released-package.zip for Flex Consumption OneDeploy; createUiDefinition basics.subscription.resourceProviders limited to Microsoft.Web, Microsoft.Storage, Microsoft.Logic, Microsoft.Insights, Microsoft.OperationalInsights; basics.resourceGroup.allowExisting=true (deploy into a non-empty resource group); contentVersion 1.0.2.0; pid placeholder (real ID only in the Partner Center zip).",
+  "files": {
+    "AzureApp/Sandbox/mainTemplate.json": "d823e6853b5d8f8580fa717d7fb34f91783a17ff324a346b434845de97af502a",
+    "AzureApp/Sandbox/createUiDefinition.json": "1bc5ae766e199df1f9df8e1b88b346258047bf96903fb07165a344112a17f6ee",
+    "AzureApp/Sandbox/artifacts/released-package.zip": "c86c02bce7a1500d47538b555843fee2319344b3e8f4944d7279b94b71bb38a7",
+    "Microsoft Defender for Endpoint/ANYRUN-Sandbox-MDE/Function App/ANYRUN-Sandbox-MDE-FA.zip": "c86c02bce7a1500d47538b555843fee2319344b3e8f4944d7279b94b71bb38a7"
+  },
+  "validation": {
+    "armTtkPassed": 50,
+    "armTtkFailed": 0,
+    "zipIntegrity": "passed",
+    "packageSourceEquality": "passed",
+    "uiTemplateParameterMapping": "passed",
+    "azureDeployment": "not run",
+    "liveEndToEnd": "not run",
+    "pythonVersion": "3.12.14",
+    "pythonSyntaxFilesPassed": 14,
+    "functionEntrypointsPassed": 3,
+    "marketplaceTtkPassed": 35,
+    "marketplaceTtkFailed": 0
+  },
+  "publicationStatus": "Local source bundle only; not pushed to GitHub.",
+  "sourceAdjustment": "User-facing texts, logs and code comments: 'task' replaced with 'analysis', the word 'paid' removed. URL path /tasks/ and identifiers unchanged."
+}

@@ -1,0 +1,302 @@
+[
+  {
+    "Name": "JSONFiles Should Be Valid",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Allowed Values Should Actually Be Allowed",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Controls In Outputs Must Exist",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "CreateUIDefinition Must Not Have Blanks",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "CreateUIDefinition Should Have Schema",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Credential Confirmation Should Not Be Hidden",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Handler Must Be Correct",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "HideExisting Must Be Correctly Handled",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Location Should Be In Outputs",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Outputs Must Be Present In Template Parameters",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Parameters Without Default Must Exist In CreateUIDefinition",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Password Textboxes Must Be Used For Password Parameters",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "PasswordBoxes Must Have Min Length",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Textboxes Are Well Formed",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Tooltips Should Be Present",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Usernames Should Not Have A Default",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Validations Must Have Message",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "VMSizes Must Match Template",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "adminPassword Should Not Be A Literal",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "adminUsername Should Not Be A Literal",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "apiVersions Should Be Recent In Reference Functions",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "apiVersions Should Be Recent",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "artifacts parameter",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "CommandToExecute Must Use ProtectedSettings For Secrets",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "DependsOn Best Practices",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Deployment Resources Must Not Be Debug",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "DeploymentTemplate Must Not Contain Hardcoded Uri",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "DeploymentTemplate Schema Is Correct",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Dynamic Variable References Should Not Use Concat",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "IDs Should Be Derived From ResourceIDs",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Location Should Not Be Hardcoded",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "ManagedIdentityExtension must not be used",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Min And Max Value Are Numbers",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Outputs Must Not Contain Secrets",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Parameter Types Should Be Consistent",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Parameters Must Be Referenced",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Password params must be secure",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "providers apiVersions Is Not Permitted",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "ResourceIds should not contain",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Resources Should Have Location",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Resources Should Not Be Ambiguous",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Secure Params In Nested Deployments",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Secure String Parameters Cannot Have Default",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Template Should Not Contain Blanks",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "URIs Should Be Properly Constructed",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Variables Must Be Referenced",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "Virtual Machines Should Not Be Preview",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "VM Images Should Use Latest Version",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "VM Size Should Be A Parameter",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  },
+  {
+    "Name": "JSONFiles Should Be Valid",
+    "Passed": true,
+    "Errors": null,
+    "Warnings": null
+  }
+]

@@ -16,6 +16,9 @@
             "Microsoft.OperationalInsights"
           ]
         },
+        "resourceGroup": {
+          "allowExisting": true
+        },
         "location": {
           "label": "Region",
           "toolTip": "Region for all resources.",
