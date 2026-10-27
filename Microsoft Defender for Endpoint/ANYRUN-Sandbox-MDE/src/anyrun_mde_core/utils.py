@@ -113,7 +113,7 @@ def generate_task_uuid_comment(evidence: str, task_uuid: str) -> str:
     return (
         f"ANY.RUN Sandbox Analysis Started\n\n"
         f"Evidence:\n{evidence}\n\n"
-        f"Link to interactive task:\n{get_task_url(task_uuid)}"
+        f"Link to interactive analysis:\n{get_task_url(task_uuid)}"
     )
 
 

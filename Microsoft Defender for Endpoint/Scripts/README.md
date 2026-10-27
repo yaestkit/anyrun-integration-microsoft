@@ -87,7 +87,7 @@ Pass non-default options such as `-SandboxAnalysisPrivacyType owner` or
 | --- | --- |
 | `-Connector Sandbox` / `-Connector Feeds` | Skip the connector menu |
 | `-DefenderIndicatorAction Audit\|Block\|Disabled` | Sandbox IOC handling (Feeds: `Audit` or `Block`) |
-| `-SandboxAnalysisPrivacyType owner` | Private ANY.RUN tasks (default `bylink`; requires a plan that supports private tasks) |
+| `-SandboxAnalysisPrivacyType owner` | Private ANY.RUN analyses (default `bylink`; requires a plan that supports private analyses) |
 | `-FeedsIntervalHours 2` | How often TI Feeds runs (hours) |
 | `-FeedsMinimumConfidence 50` | Minimum indicator confidence for TI Feeds |
 | `-RotateClientSecret` | Create a new client secret (default lifetime: 6 months) |

@@ -25,7 +25,7 @@ StatusCallback = Callable[[str, dict[str, object]], None]
 
 
 class RecoveryRequired(RuntimeError):
-    """A paid POST may have succeeded; automatic resubmission is unsafe."""
+    """A submission POST may have succeeded; automatic resubmission is unsafe."""
 
 
 def _evidence_key(analysis_type: str, value: str) -> str:
@@ -49,7 +49,7 @@ def process_alert(
     """Resume saved tasks before collecting any new evidence."""
     _check_deadline(deadline_monotonic)
     ms_defender = MicrosoftDefender(log, deadline_monotonic=deadline_monotonic)
-    # Validate the IOC setting before any paid submission.
+    # Validate the IOC setting before any submission.
     ms_defender.get_indicator_action()
     ms_defender.deduplicate_comments = bool((resume_state or {}).get("work_started_at"))
     saved = list((resume_state or {}).get("analyses") or [])
@@ -75,7 +75,7 @@ def process_alert(
                 or (resume_state or {}).get("stage") == "submitting_to_anyrun"
             ):
                 raise RecoveryRequired(
-                    "A submission may have created a paid ANY.RUN task, but its UUID was not saved. "
+                    "A submission may have created an ANY.RUN analysis, but its UUID was not saved. "
                     "Check ANY.RUN history and restore the UUID; automatic resubmission is disabled."
                 )
             continue
@@ -289,7 +289,7 @@ def process_analysis(
     if not item.get("task_uuid"):
         if resume_item:
             raise RecoveryRequired(
-                "Cannot resubmit an uncertain paid analysis without its task UUID."
+                "Cannot resubmit an uncertain analysis without its analysis UUID."
             )
         if file is not None:
             item["sha256"] = hashlib.sha256(file).hexdigest()
@@ -297,7 +297,7 @@ def process_analysis(
         item["submission_started_at"] = (
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         )
-        save("submitting_to_anyrun")  # A failed checkpoint prevents the paid POST.
+        save("submitting_to_anyrun")  # A failed checkpoint prevents the submission POST.
         try:
             if analysis_type == "file":
                 analysis_options.pop("obj_ext_browser", None)
@@ -334,7 +334,7 @@ def process_analysis(
             ) from error
         if not task_uuid:
             raise RecoveryRequired(
-                "ANY.RUN submission did not return a task UUID; do not resubmit automatically."
+                "ANY.RUN submission did not return an analysis UUID; do not resubmit automatically."
             )
         item.update(
             task_uuid=str(task_uuid),
@@ -414,7 +414,7 @@ def process_analysis(
         ms_defender.add_comment(
             alert_id,
             f"Microsoft Defender rejected {item['rejected_indicators_count']} of "
-            f"{item['indicators_count']} indicators produced by ANY.RUN task {task_uuid}. "
+            f"{item['indicators_count']} indicators produced by ANY.RUN analysis {task_uuid}. "
             "See Function App logs for failure reasons.",
         )
         item["ioc_rejections_commented"] = True
@@ -457,7 +457,7 @@ def _wait_for_report(
         _check_deadline(deadline_monotonic)
         if time.monotonic() >= wait_deadline:
             raise TimeoutError(
-                f"ANY.RUN verdict for task {task_uuid} was not available in time."
+                f"ANY.RUN verdict for analysis {task_uuid} was not available in time."
             )
         previous_deadline = getattr(connector, "request_deadline", None)
         connector.request_deadline = (
@@ -481,7 +481,7 @@ def _wait_for_report(
                 ):
                     raise
                 log.warning(
-                    "Report polling for task %s delayed (%s/%s): %s.",
+                    "Report polling for analysis %s delayed (%s/%s): %s.",
                     task_uuid,
                     consecutive_errors,
                     Config.REPORT_TRANSIENT_ERROR_LIMIT,
@@ -502,7 +502,7 @@ def _wait_for_report(
             isinstance(status, (int, float)) and 0 <= status < 100
         )
         if str(status).upper() in {"FAILED", "-1"}:
-            raise RuntimeError(f"ANY.RUN task {task_uuid} failed.")
+            raise RuntimeError(f"ANY.RUN analysis {task_uuid} failed.")
         # A provisional verdict is not proof of completion. Elapsed opt_timeout
         # cannot prove it either (preparation/manual extensions). Missing or
         # unknown status fails closed; require a positive completion signal.
@@ -528,7 +528,7 @@ def _wait_for_report(
             last_progress, last_progress_at = progress, now
         if now - last_log >= Config.HEARTBEAT_SECONDS:
             log.info(
-                "Waiting for ANY.RUN task %s: %s, remaining %s s.",
+                "Waiting for ANY.RUN analysis %s: %s, remaining %s s.",
                 task_uuid,
                 status,
                 remaining,

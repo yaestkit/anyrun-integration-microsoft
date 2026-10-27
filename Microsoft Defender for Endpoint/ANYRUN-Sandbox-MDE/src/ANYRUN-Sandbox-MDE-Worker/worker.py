@@ -144,7 +144,7 @@ def _run_job(
         def update_progress(state: str, details: dict) -> None:
             if lease_lost.is_set():
                 raise RuntimeError("Worker lease was lost; stopping this delivery.")
-            # Progress telemetry must never abort a paid analysis. Terminal
+            # Progress telemetry must never abort an analysis. Terminal
             # states and checkpoints retain retries. Only _keep_alive writes
             # periodic heartbeats; optional progress is attempted once.
             _persist_status(
@@ -256,7 +256,7 @@ def _run_job(
             stage="interrupted",
             attempt=attempt,
             error_type=type(error).__name__,
-            error="Worker interrupted; the next queue delivery will resume saved tasks.",
+            error="Worker interrupted; the next queue delivery will resume saved analyses.",
             attempts=TERMINAL_STATUS_WRITE_ATTEMPTS,
             budget_seconds=TERMINAL_STATUS_WRITE_BUDGET_SECONDS,
         )
@@ -279,14 +279,14 @@ def _run_job(
     )
     if not completed_persisted:
         # Business checkpoints contain enriched=True for all completed tasks.
-        # A retry can safely restore tracking without another paid POST.
+        # A retry can safely restore tracking without another submission.
         logging.error(
             "ANY.RUN job %s completed, but its terminal status could not be persisted.",
             job_id,
         )
         _add_tracking_failure_comment(alert_id, job_id)
         # All business checkpoints are durable now, so a queue retry can safely
-        # persist completed without creating another paid analysis.
+        # persist completed without creating another analysis.
         raise RuntimeError(
             "Completed job could not persist its terminal status; safe recovery will retry."
         )

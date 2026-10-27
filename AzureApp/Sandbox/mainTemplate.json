@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.0.0.0",
+  "contentVersion": "1.0.2.0",
   "metadata": {
     "description": "ANY.RUN Sandbox for Microsoft Defender for Endpoint: Function App (starter, queue worker, status) + Logic App that detonates files and URLs from new MDE alerts in ANY.RUN and enriches the alerts."
   },
@@ -1228,7 +1228,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "pid-2d49291a-8220-424b-991d-cd26378bcc0c-partnercenter",
+      "name": "pid-TRACKING-GUID-FROM-PARTNER-CENTER",
       "properties": {
         "mode": "Incremental",
         "template": {

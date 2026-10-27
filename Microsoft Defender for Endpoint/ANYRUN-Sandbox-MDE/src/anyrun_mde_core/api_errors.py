@@ -12,4 +12,4 @@ class SandboxTransportError(RuntimeError):
 
 
 class SubmissionRejected(RuntimeError):
-    """A confirmed permanent rejection; no ambiguous paid task to recover."""
+    """A confirmed permanent rejection; no ambiguous analysis to recover."""

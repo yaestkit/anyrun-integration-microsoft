@@ -57,8 +57,8 @@ def _mark_stale(status: dict, now: datetime | None = None) -> dict:
         "error_type": "StaleJob",
         "error": (
             f"No worker heartbeat for {int(age)} seconds. The worker may have stopped "
-            "or status storage may be unavailable. Check the saved task UUID and "
-            "Function App logs before Resubmit; Resubmit creates a new paid analysis."
+            "or status storage may be unavailable. Check the saved analysis UUID and "
+            "Function App logs before Resubmit; Resubmit creates a new analysis."
         ),
     }
 
