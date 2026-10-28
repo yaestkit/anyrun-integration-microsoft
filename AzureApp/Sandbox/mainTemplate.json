@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.0.2.0",
+  "contentVersion": "1.0.1.0",
   "metadata": {
     "description": "ANY.RUN Sandbox for Microsoft Defender for Endpoint: Function App (starter, queue worker, status) + Logic App that detonates files and URLs from new MDE alerts in ANY.RUN and enriches the alerts."
   },
@@ -131,7 +131,7 @@
     "jobStatusContainerName": "anyrun-job-status",
     "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
     "wdatpApiId": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'wdatp')]",
-    "functionPackageUri": "[uri(parameters('_artifactsLocation'), concat('artifacts/released-package.zip', parameters('_artifactsLocationSasToken')))]",
+    "functionPackageUri": "[uri(parameters('_artifactsLocation'), concat('artifacts/ANYRUN-Sandbox-MDE-FA.zip', parameters('_artifactsLocationSasToken')))]",
     "resourceTags": {
       "Vendor": "ANY.RUN",
       "Solution": "ANY.RUN Sandbox for Microsoft Defender for Endpoint",
